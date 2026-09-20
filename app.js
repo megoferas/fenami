@@ -1,15 +1,33 @@
-import { h, render, createContext } from 'https://esm.sh/preact@10.24.3';
-import { useState, useEffect, useMemo, useRef, useContext } from 'https://esm.sh/preact@10.24.3/hooks';
-import htm from 'https://esm.sh/htm@3.1.1';
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { SUPABASE_URL, SUPABASE_KEY, MAP_STYLE, MAP_CENTER } from './config.js';
+import { html, render, useState, useEffect, useMemo, useRef } from 'https://cdn.jsdelivr.net/npm/htm@3.1.1/preact/standalone.module.js';
+import { SUPABASE_URL, SUPABASE_KEY, MAP_STYLE, MAP_CENTER, MAPLIBRE_JS, MAPLIBRE_CSS } from './config.js';
 import { T } from './i18n.js';
 import { Icon, iconSvg, CATS, CAT_ORDER, INTERESTS } from './icons.js';
 
-const html = htm.bind(h);
-const sb = createClient(SUPABASE_URL, SUPABASE_KEY);
-const Ctx = createContext(null);
-const useApp = () => useContext(Ctx);
+if (!window.supabase) throw new Error('The Supabase library did not load (cdn.jsdelivr.net)');
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// MapLibre is loaded only when the map is opened, so it never blocks the first screen.
+let mapLibPromise = null;
+function loadMapLib() {
+  if (window.maplibregl) return Promise.resolve();
+  if (!mapLibPromise) {
+    mapLibPromise = new Promise((resolve, reject) => {
+      const css = document.createElement('link');
+      css.rel = 'stylesheet';
+      css.href = MAPLIBRE_CSS;
+      document.head.appendChild(css);
+      const js = document.createElement('script');
+      js.src = MAPLIBRE_JS;
+      js.onload = () => resolve();
+      js.onerror = () => { mapLibPromise = null; reject(new Error('maplibre failed to load')); };
+      document.head.appendChild(js);
+    });
+  }
+  return mapLibPromise;
+}
+// Shared translation state. App() refreshes it on every render, so all screens see the current language.
+let APP = null;
+const useApp = () => APP;
 
 /* ---------- helpers ---------- */
 const pname = (p, lang) => (lang === 'ar' ? p.name_ar || p.name : p.name);
@@ -37,7 +55,7 @@ function ageFrom(iso) {
 
 /* ---------- small pieces ---------- */
 function Splash() {
-  return html`<div class="center"><img src="assets/logo.jpg" alt="FENAMI" /></div>`;
+  return html`<div class="center"><img src="logo.jpg" alt="FENAMI" /></div>`;
 }
 
 function PlaceCard({ p }) {
@@ -89,7 +107,7 @@ function AuthScreen() {
     <button class="chip langbtn" type="button" onClick=${() => setLang(lang === 'ar' ? 'en' : 'ar')}>
       ${lang === 'ar' ? 'English' : 'العربية'}
     </button>
-    <img src="assets/logo.jpg" alt="FENAMI" />
+    <img src="logo.jpg" alt="FENAMI" />
     <div class="tag">${t('tagline')}</div>
     <form class="sticker card" onSubmit=${submit}>
       <label class="label">${t('email')}
@@ -265,22 +283,29 @@ function Explore({ places, initialId, loadError }) {
 
   // create the map when the map view is shown
   useEffect(() => {
-    if (view !== 'map' || !mapEl.current) return;
-    if (typeof maplibregl === 'undefined') { setMapErr(true); return; }
-    let map;
-    try {
-      map = new maplibregl.Map({
-        container: mapEl.current, style: MAP_STYLE, center: MAP_CENTER, zoom: 11.2,
-        attributionControl: { compact: true },
-      });
-    } catch (e) { setMapErr(true); return; }
-    mapRef.current = map;
-    map.on('click', () => setSel(null));
-    setMapReady(true);
+    if (view !== 'map') return;
+    let cancelled = false;
+    let map = null;
+    setMapErr(false);
+    loadMapLib()
+      .then(() => {
+        if (cancelled || !mapEl.current) return;
+        try {
+          map = new maplibregl.Map({
+            container: mapEl.current, style: MAP_STYLE, center: MAP_CENTER, zoom: 11.2,
+            attributionControl: { compact: true },
+          });
+        } catch (e) { setMapErr(true); return; }
+        mapRef.current = map;
+        map.on('click', () => setSel(null));
+        setMapReady(true);
+      })
+      .catch(() => setMapErr(true));
     return () => {
+      cancelled = true;
       markers.current.forEach((m) => m.remove());
       markers.current = [];
-      map.remove();
+      if (map) map.remove();
       mapRef.current = null;
       setMapReady(false);
     };
@@ -473,7 +498,11 @@ function App() {
   else if (me === null) screen = html`<${Onboarding} session=${session} onDone=${() => loadMe(uid)} />`;
   else screen = html`<${Shell} me=${me} route=${route} />`;
 
-  return html`<${Ctx.Provider} value=${{ t, lang, setLang }}>${screen}<//>`;
+  APP = { t, lang, setLang };
+  return screen;
 }
 
 render(html`<${App} />`, document.getElementById('app'));
+window.__mounted = true;
+const boot = document.getElementById('boot');
+if (boot) boot.remove();

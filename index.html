@@ -8,17 +8,71 @@
 <meta name="apple-mobile-web-app-title" content="FENAMI">
 <title>FENAMI</title>
 <link rel="manifest" href="manifest.json">
-<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<link rel="icon" href="icons/icon-192.png">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Baloo+Bhaijaan+2:wght@600;800&family=Rubik:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
-<link rel="stylesheet" href="css/styles.css">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icon-192.png">
+<link rel="stylesheet" href="styles.css">
+<!-- Fonts load in the background: the app never waits for them -->
+<link rel="stylesheet" media="print" onload="this.media='all'"
+  href="https://fonts.googleapis.com/css2?family=Baloo+Bhaijaan+2:wght@600;800&family=Rubik:wght@400;500;600&display=swap">
 </head>
 <body>
 <div id="app"></div>
-<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-<script type="module" src="js/app.js"></script>
+
+<div id="boot" style="position:fixed;inset:0;z-index:9999;background:#DF7292;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:24px;color:#14300F;font-family:system-ui,sans-serif;text-align:center;overflow:auto;">
+  <img src="logo.jpg" alt="FENAMI" style="width:min(260px,70%);display:block;">
+  <div id="boot-msg" style="font-weight:600;font-size:16px;">Loading... / لحظة...</div>
+  <div id="boot-diag" style="display:none;background:#FFF8FA;border:2px solid #14300F;border-radius:16px;padding:14px;max-width:340px;width:100%;font-size:14px;text-align:start;">
+    <div style="font-weight:700;margin-bottom:8px;">Taking longer than usual / بياخد وقت أطول من المعتاد</div>
+    <div id="boot-list" style="display:flex;flex-direction:column;gap:4px;margin-bottom:8px;"></div>
+    <pre id="boot-err" style="white-space:pre-wrap;word-break:break-word;font-size:12px;margin:0 0 10px;"></pre>
+    <button onclick="location.reload()" style="height:44px;width:100%;border:2px solid #14300F;border-radius:22px;background:#DF7292;font-weight:700;font-size:16px;">Reload / إعادة تحميل</button>
+  </div>
+</div>
+
+<script>
+  // If the app has not started after 9 seconds, test which service is unreachable
+  // from this device and show the result on screen.
+  (function () {
+    var errors = [];
+    window.addEventListener('error', function (e) {
+      errors.push((e.message || 'error') + (e.filename ? ' @ ' + e.filename.split('/').slice(-2).join('/') : ''));
+    });
+    window.addEventListener('unhandledrejection', function (e) {
+      errors.push('promise: ' + ((e.reason && e.reason.message) || e.reason));
+    });
+    var probes = [
+      ['libraries (jsdelivr)', 'https://cdn.jsdelivr.net/npm/htm@3.1.1/package.json'],
+      ['database (supabase)', 'https://bzzpubbheywnmmansoze.supabase.co/auth/v1/health'],
+      ['fonts (google)', 'https://fonts.googleapis.com/css2?family=Rubik'],
+      ['map tiles (openfreemap)', 'https://tiles.openfreemap.org/planet']
+    ];
+    function probe(p, done) {
+      var c = new AbortController();
+      var t = setTimeout(function () { c.abort(); }, 7000);
+      fetch(p[1], { mode: 'no-cors', cache: 'no-store', signal: c.signal })
+        .then(function () { clearTimeout(t); done(true); })
+        .catch(function () { clearTimeout(t); done(false); });
+    }
+    setTimeout(function () {
+      if (window.__mounted) return;
+      var box = document.getElementById('boot-diag');
+      if (!box) return;
+      box.style.display = 'block';
+      var list = document.getElementById('boot-list');
+      probes.forEach(function (p) {
+        var row = document.createElement('div');
+        row.textContent = '… ' + p[0];
+        list.appendChild(row);
+        probe(p, function (ok) { row.textContent = (ok ? '✓ ' : '✗ ') + p[0]; });
+      });
+      setTimeout(function () {
+        document.getElementById('boot-err').textContent = errors.join('\n');
+      }, 8000);
+    }, 9000);
+  })();
+</script>
+
+<script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script type="module" src="app.js"></script>
 </body>
 </html>
