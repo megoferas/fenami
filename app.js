@@ -1,7 +1,7 @@
 import { html, render, useState, useEffect, useMemo, useRef } from 'https://cdn.jsdelivr.net/npm/htm@3.1.1/preact/standalone.module.js';
-import { SUPABASE_URL, SUPABASE_KEY, MAP_STYLE, MAP_CENTER, MAPLIBRE_JS, MAPLIBRE_CSS } from './config.js?v=8';
-import { T } from './i18n.js?v=8';
-import { Icon, iconSvg, CATS, CAT_ORDER, INTERESTS } from './icons.js?v=8';
+import { SUPABASE_URL, SUPABASE_KEY, MAP_STYLE, MAP_CENTER, MAPLIBRE_JS, MAPLIBRE_CSS } from './config.js?v=9';
+import { T } from './i18n.js?v=9';
+import { Icon, iconSvg, CATS, CAT_ORDER, INTERESTS } from './icons.js?v=9';
 
 if (!window.supabase) throw new Error('The Supabase library did not load (cdn.jsdelivr.net)');
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -138,11 +138,12 @@ function PlanCard({ p, meId, invited }) {
 
 function Nav({ tab, badge }) {
   const { t } = useApp();
-  const items = ['home', 'explore', 'plans', 'friends', 'profile'];
+  const items = ['home', 'explore', 'plans', 'inbox', 'profile'];
+  const icon = (id) => (id === 'inbox' ? 'chat' : id);
   return html`<nav class="nav">
     ${items.map(
       (id) => html`<a href=${'#' + id} class=${tab === id ? 'on' : ''}>
-        <span class="pill"><${Icon} name=${id} />${id === 'friends' && badge > 0 && html`<span class="badge">${badge}</span>`}</span>
+        <span class="pill"><${Icon} name=${icon(id)} />${id === 'inbox' && badge > 0 && html`<span class="badge">${badge > 99 ? '99+' : badge}</span>`}</span>
         <span>${t('nav.' + id)}</span>
       </a>`
     )}
@@ -961,7 +962,40 @@ function NewPlan({ me, places, presetPlaceId, reloadPlans }) {
 }
 
 /* ---------- chat ---------- */
-function ChatPage({ me, id }) {
+const dayKey = (iso) => { const d = new Date(iso); return d.getFullYear() + '-' + d.getMonth() + '-' + d.getDate(); };
+
+function dayLabel(iso, lang, t) {
+  const d = new Date(iso);
+  const diff = Math.round((startOfDay(new Date()) - startOfDay(d)) / 86400000);
+  if (diff === 0) return t('today');
+  if (diff === 1) return t('yesterday');
+  return d.toLocaleDateString(locale(lang), { weekday: 'short', day: 'numeric', month: 'short' });
+}
+
+function shortTime(iso, lang, t) {
+  const d = new Date(iso);
+  const diff = Math.round((startOfDay(new Date()) - startOfDay(d)) / 86400000);
+  if (diff === 0) return d.toLocaleTimeString(locale(lang), { hour: 'numeric', minute: '2-digit' });
+  if (diff === 1) return t('yesterday');
+  return d.toLocaleDateString(locale(lang), { day: 'numeric', month: 'short' });
+}
+
+// where a message sits inside a run of messages from the same person
+function runInfo(list, i, key) {
+  const m = list[i];
+  const prev = list[i - 1];
+  const next = list[i + 1];
+  const same = (a, b) => a && b && a[key] === b[key] && dayKey(a.created_at) === dayKey(b.created_at)
+    && Math.abs(new Date(b.created_at) - new Date(a.created_at)) < 3 * 60 * 1000;
+  return { first: !same(prev, m), last: !same(m, next), newDay: !prev || dayKey(prev.created_at) !== dayKey(m.created_at) };
+}
+
+function DaySep({ iso }) {
+  const { t, lang } = useApp();
+  return html`<div class="daysep"><span>${dayLabel(iso, lang, t)}</span></div>`;
+}
+
+function ChatPage({ me, id, refreshInbox }) {
   const { t, lang } = useApp();
   const [plan, setPlan] = useState(undefined);
   const [members, setMembers] = useState([]);
@@ -998,6 +1032,12 @@ function ChatPage({ me, id }) {
     if (endRef.current) endRef.current.scrollIntoView({ block: 'end' });
   }, [msgs.length]);
 
+  // opening the chat counts as reading it
+  useEffect(() => {
+    if (!msgs.length) return;
+    sb.rpc('mark_read', { p_kind: 'plan', p_ref: id }).then(() => { if (refreshInbox) refreshInbox(); });
+  }, [msgs.length, id]);
+
   const names = useMemo(() => {
     const m = {};
     members.forEach((x) => { m[x.user_id] = x.profile ? x.profile.display_name : '?'; });
@@ -1011,9 +1051,10 @@ function ChatPage({ me, id }) {
     setSending(true);
     setErr('');
     setText('');
+    setMsgs((prev) => [...prev, { id: 'tmp-' + Date.now(), user_id: me.id, body, created_at: new Date().toISOString(), pending: true }]);
     const { error } = await sb.from('messages').insert({ plan_id: id, user_id: me.id, body });
     setSending(false);
-    if (error) { setErr(error.message); setText(body); return; }
+    if (error) { setErr(error.message); setText(body); }
     load();
   }
 
@@ -1022,7 +1063,7 @@ function ChatPage({ me, id }) {
   if (plan === undefined) return html`<div class="chat"><div class="chathead"><div class="muted">${t('loading')}</div></div></div>`;
   if (plan === null) {
     return html`<div class="chat"><div class="chathead">
-      <div class="pagehead"><${BackBtn} to="plans" /></div>
+      <div class="pagehead"><${BackBtn} to="inbox" /></div>
       <div class="note bad">${t('notFound')}</div>
     </div></div>`;
   }
@@ -1031,23 +1072,28 @@ function ChatPage({ me, id }) {
     <div class="wm" aria-hidden="true"></div>
     <div class="chathead">
       <div class="pagehead" style="justify-content:flex-start">
-        <${BackBtn} to=${'plan/' + id} />
-        <div>
+        <${BackBtn} to="inbox" />
+        <a class="chatwho" href=${'#plan/' + id}>
           <div class="h2" style="font-size:22px">${plan.title}</div>
           <div class="muted">${members.map((m) => (m.profile ? m.profile.display_name : '?')).join(', ')}</div>
-        </div>
+        </a>
       </div>
-      <div class="chatnote"><${Icon} name="clock" size=${18} /> ${t('chatNotice')}</div>
+      <div class="chatnote"><${Icon} name="clock" size=${18} /> <span>${t('chatNotice')}</span></div>
     </div>
 
     <div class="msgs">
       ${!isMember && html`<div class="note">${t('chatNeedJoin')}</div>`}
       ${isMember && msgs.length === 0 && html`<div class="muted" style="text-align:center;margin-top:12px">${t('noMessages')}</div>`}
-      ${msgs.map((m) => html`<div class=${'bubble' + (m.user_id === me.id ? ' mine' : '')}>
-        <div class="bname">${names[m.user_id] || '...'}</div>
-        <div class="btext">${m.body}</div>
-        <div class="btime">${fmtTime(m.created_at, lang)}</div>
-      </div>`)}
+      ${msgs.map((m, i) => {
+        const info = runInfo(msgs, i, 'user_id');
+        const mine = m.user_id === me.id;
+        return html`${info.newDay && html`<${DaySep} iso=${m.created_at} />`}
+          <div class=${'bubble' + (mine ? ' mine' : '') + (info.first ? ' first' : '') + (info.last ? ' last' : '') + (m.pending ? ' pending' : '')}>
+            ${!mine && info.first && html`<div class="bname">${names[m.user_id] || '...'}</div>`}
+            <div class="btext">${m.body}</div>
+            ${info.last && html`<div class="btime">${m.pending ? t('pending') : fmtTime(m.created_at, lang)}</div>`}
+          </div>`;
+      })}
       <div ref=${endRef}></div>
     </div>
 
@@ -1146,7 +1192,10 @@ function FriendsTab({ me, rels, reloadRels }) {
 
   return html`<div class="screen">
     <div class="pagehead">
-      <div class="h2">${t('nav.friends')}</div>
+      <div class="pagehead" style="justify-content:flex-start">
+        <${BackBtn} to="inbox" />
+        <div class="h2">${t('nav.friends')}</div>
+      </div>
       <button class="chip" onClick=${() => shareInvite(me, t)}>${t('inviteBtn')}</button>
     </div>
 
@@ -1200,8 +1249,8 @@ function FriendsTab({ me, rels, reloadRels }) {
   </div>`;
 }
 
-/* ---------- friend chat + view-once photos ---------- */
-function compressImage(file, maxSide = 1280, quality = 0.72) {
+/* ---------- friend chat: photos (tap to open once), voice, in-app camera ---------- */
+function compressImage(file, maxSide = 1280, quality = 0.75) {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
     const img = new Image();
@@ -1221,27 +1270,181 @@ function compressImage(file, maxSide = 1280, quality = 0.72) {
   });
 }
 
-// the viewer's own username is repeated over the photo, so a leaked screenshot shows who took it
-function wmUrl(text) {
-  const svg = "<svg xmlns='http://www.w3.org/2000/svg' width='230' height='130'><text x='115' y='70' text-anchor='middle' transform='rotate(-24 115 65)' font-family='sans-serif' font-size='20' font-weight='700' fill='white' fill-opacity='0.42' stroke='black' stroke-opacity='0.25' stroke-width='0.6'>" + text + '</text></svg>';
-  return 'url("data:image/svg+xml,' + encodeURIComponent(svg) + '")';
+const fmtDur = (ms) => {
+  const s = Math.max(0, Math.round(ms / 1000));
+  return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+};
+
+function pickAudioMime() {
+  if (typeof MediaRecorder === 'undefined') return '';
+  for (const m of ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm']) {
+    if (MediaRecorder.isTypeSupported(m)) return m;
+  }
+  return '';
 }
 
-function DMPage({ me, otherId }) {
+// Our own camera screen (not the phone's camera app)
+function CameraCapture({ onSend, onClose }) {
+  const { t } = useApp();
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
+  const fileRef = useRef(null);
+  const [facing, setFacing] = useState('environment');
+  const [shot, setShot] = useState(null);
+  const [err, setErr] = useState('');
+
+  function stopStream() {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((tr) => tr.stop());
+      streamRef.current = null;
+    }
+  }
+
+  async function start(face) {
+    stopStream();
+    setErr('');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: face }, width: { ideal: 1280 }, height: { ideal: 1280 } }, audio: false,
+      });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play().catch(() => {});
+      }
+    } catch (e) {
+      setErr(t('cameraDenied'));
+    }
+  }
+
+  useEffect(() => {
+    start(facing);
+    return stopStream;
+  }, [facing]);
+
+  function capture() {
+    const v = videoRef.current;
+    if (!v || !v.videoWidth) return;
+    const scale = Math.min(1, 1280 / Math.max(v.videoWidth, v.videoHeight));
+    const w = Math.round(v.videoWidth * scale);
+    const h = Math.round(v.videoHeight * scale);
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    const ctx = c.getContext('2d');
+    if (facing === 'user') { ctx.translate(w, 0); ctx.scale(-1, 1); }
+    ctx.drawImage(v, 0, 0, w, h);
+    c.toBlob((b) => { if (b) setShot({ blob: b, url: URL.createObjectURL(b) }); }, 'image/jpeg', 0.78);
+  }
+
+  async function pickFile(e) {
+    const f = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!f) return;
+    try {
+      const b = await compressImage(f);
+      setShot({ blob: b, url: URL.createObjectURL(b) });
+    } catch (e2) { setErr(t('snapError')); }
+  }
+
+  function retake() {
+    if (shot) URL.revokeObjectURL(shot.url);
+    setShot(null);
+  }
+
+  return html`<div class="cam">
+    <video ref=${videoRef} class=${'camvideo' + (facing === 'user' ? ' mirror' : '')} style=${shot ? 'display:none' : ''} playsinline muted autoplay></video>
+    ${shot && html`<img class="camshot" src=${shot.url} alt="" />`}
+
+    <div class="camtop">
+      <button class="camround" aria-label=${t('close')} onClick=${onClose}><${Icon} name="close" /></button>
+      ${!shot && html`<button class="camround" aria-label="flip" onClick=${() => setFacing(facing === 'user' ? 'environment' : 'user')}><${Icon} name="flip" /></button>`}
+    </div>
+
+    ${err && html`<div class="camerr">${err}</div>`}
+
+    <div class="cambar">
+      ${!shot && html`<button class="camround" aria-label=${t('gallery')} onClick=${() => fileRef.current && fileRef.current.click()}><${Icon} name="image" /></button>
+        <button class="shutter" aria-label=${t('sendPhoto')} onClick=${capture}><span></span></button>
+        <span class="camspacer"></span>`}
+      ${shot && html`<button class="camtext" onClick=${retake}>${t('retake')}</button>
+        <button class="camsend" aria-label=${t('send')} onClick=${() => onSend(shot.blob)}><${Icon} name="send" size=${28} /></button>`}
+    </div>
+    <input ref=${fileRef} type="file" accept="image/*" style="display:none" onChange=${pickFile} />
+  </div>`;
+}
+
+function VoiceBubble({ m, mine }) {
+  const { lang } = useApp();
+  const [ready, setReady] = useState(false);
+  const [playing, setPlaying] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const audioRef = useRef(null);
+
+  // download once, so play() can run straight from the tap (iPhones need that)
+  useEffect(() => {
+    let alive = true;
+    let url = null;
+    sb.storage.from('voice').download(m.voice_path).then((dl) => {
+      if (!alive || dl.error || !dl.data) return;
+      url = URL.createObjectURL(dl.data);
+      const a = new Audio(url);
+      a.preload = 'auto';
+      a.ontimeupdate = () => setProgress(a.duration ? a.currentTime / a.duration : 0);
+      a.onended = () => { setPlaying(false); setProgress(0); };
+      audioRef.current = a;
+      setReady(true);
+    });
+    return () => {
+      alive = false;
+      if (audioRef.current) audioRef.current.pause();
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [m.voice_path]);
+
+  function toggle() {
+    const a = audioRef.current;
+    if (!a) return;
+    if (playing) { a.pause(); setPlaying(false); return; }
+    a.play().then(() => setPlaying(true)).catch(() => setPlaying(false));
+  }
+
+  const bars = useMemo(() => {
+    const h = hash(m.id || m.voice_path);
+    return Array.from({ length: 22 }, (_, i) => 6 + ((h >> (i % 20)) & 7) * 2.6 + (i % 3) * 2);
+  }, [m.id]);
+
+  return html`<div class="voice">
+    <button class="voiceplay" onClick=${toggle} disabled=${!ready} aria-label="play">
+      <${Icon} name=${playing ? 'pause' : 'play'} size=${20} />
+    </button>
+    <div class="wave">
+      ${bars.map((h, i) => html`<span class=${i / bars.length < progress ? 'on' : ''} style=${{ height: h + 'px' }}></span>`)}
+    </div>
+    <span class="voicetime">${fmtDur(m.duration_ms || 0)}</span>
+  </div>`;
+}
+
+function DMPage({ me, otherId, refreshInbox }) {
   const { t, lang } = useApp();
   const [thread, setThread] = useState(undefined);
   const [other, setOther] = useState(null);
   const [msgs, setMsgs] = useState([]);
   const [views, setViews] = useState([]);
   const [text, setText] = useState('');
-  const [sending, setSending] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [viewer, setViewer] = useState(null);
+  const [showCam, setShowCam] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [recSecs, setRecSecs] = useState(0);
   const endRef = useRef(null);
-  const holdRef = useRef(false);
   const viewerRef = useRef(null);
+  const openingRef = useRef(false);
   const timerRef = useRef(null);
-  const fileRef = useRef(null);
+  const recRef = useRef(null);
+  const chunksRef = useRef([]);
+  const recTimer = useRef(null);
 
   useEffect(() => {
     let alive = true;
@@ -1262,7 +1465,7 @@ function DMPage({ me, otherId }) {
   async function load() {
     if (!thread) return;
     const [m, v] = await Promise.all([
-      sb.from('dm_messages').select('id,sender_id,kind,body,snap_path,created_at')
+      sb.from('dm_messages').select('id,sender_id,kind,body,snap_path,voice_path,duration_ms,created_at')
         .eq('thread_id', thread).gt('expires_at', new Date().toISOString()).order('created_at').limit(300),
       sb.from('snap_views').select('message_id,viewer_id'),
     ]);
@@ -1284,8 +1487,14 @@ function DMPage({ me, otherId }) {
     if (endRef.current) endRef.current.scrollIntoView({ block: 'end' });
   }, [msgs.length]);
 
-  function endView() {
-    holdRef.current = false;
+  // opening the chat counts as reading it
+  useEffect(() => {
+    if (!thread || !msgs.length) return;
+    sb.rpc('mark_read', { p_kind: 'dm', p_ref: thread }).then(() => { if (refreshInbox) refreshInbox(); });
+  }, [thread, msgs.length]);
+
+  /* ----- photos: tap to open, seen once ----- */
+  function closeSnap() {
     clearTimeout(timerRef.current);
     const v = viewerRef.current;
     if (v) {
@@ -1297,87 +1506,158 @@ function DMPage({ me, otherId }) {
   }
 
   useEffect(() => {
-    const onHide = () => { if (document.hidden) endView(); };
+    const onHide = () => { if (document.hidden) closeSnap(); };
     document.addEventListener('visibilitychange', onHide);
-    return () => { document.removeEventListener('visibilitychange', onHide); endView(); };
+    return () => {
+      document.removeEventListener('visibilitychange', onHide);
+      closeSnap();
+      cleanupRec();
+    };
   }, []);
 
-  async function startView(m) {
-    if (viewerRef.current || holdRef.current) return;
-    holdRef.current = true;
+  async function openSnap(m) {
+    if (viewerRef.current || openingRef.current) return;
+    openingRef.current = true;
     setErr('');
     const { data: path, error } = await sb.rpc('open_snap', { p_message_id: m.id });
     if (error) {
-      holdRef.current = false;
+      openingRef.current = false;
       load();
       if (!/already/i.test(error.message)) setErr(t('snapError'));
       return;
     }
     setViews((prev) => [...prev, { message_id: m.id, viewer_id: me.id }]);
     const dl = await sb.storage.from('snaps').download(path);
-    if (dl.error || !dl.data) { holdRef.current = false; setErr(t('snapError')); return; }
+    openingRef.current = false;
+    if (dl.error || !dl.data) { setErr(t('snapError')); return; }
     const url = URL.createObjectURL(dl.data);
-    if (!holdRef.current) { // finger was lifted before the photo arrived
-      URL.revokeObjectURL(url);
-      sb.storage.from('snaps').remove([path]);
-      return;
-    }
     viewerRef.current = { url, path };
     setViewer({ url, path });
-    timerRef.current = setTimeout(endView, 10000);
+    timerRef.current = setTimeout(closeSnap, 10000);
   }
 
+  /* ----- sending ----- */
   async function sendText(e) {
     e.preventDefault();
     const body = text.trim();
-    if (!body || sending || !thread) return;
-    setSending(true);
-    setErr('');
+    if (!body || !thread) return;
     setText('');
+    setErr('');
+    setMsgs((prev) => [...prev, { id: 'tmp-' + Date.now(), sender_id: me.id, kind: 'text', body, created_at: new Date().toISOString(), pending: true }]);
     const { error } = await sb.from('dm_messages').insert({ thread_id: thread, sender_id: me.id, kind: 'text', body });
-    setSending(false);
-    if (error) { setErr(t('friendsError')); setText(body); return; }
+    if (error) { setErr(t('friendsError')); setText(body); }
     load();
   }
 
-  async function sendPhoto(e) {
-    const file = e.target.files && e.target.files[0];
-    e.target.value = '';
-    if (!file || !thread) return;
-    setSending(true);
+  async function sendPhotoBlob(blob) {
+    if (!thread) return;
+    setBusy(true);
     setErr('');
     try {
-      const blob = await compressImage(file);
       const path = thread + '/' + crypto.randomUUID() + '.jpg';
       const up = await sb.storage.from('snaps').upload(path, blob, { contentType: 'image/jpeg', upsert: false });
       if (up.error) throw up.error;
       const ins = await sb.from('dm_messages').insert({ thread_id: thread, sender_id: me.id, kind: 'snap', snap_path: path });
       if (ins.error) throw ins.error;
       await load();
-    } catch (e2) {
+    } catch (e) {
       setErr(t('snapError'));
     }
-    setSending(false);
+    setBusy(false);
+  }
+
+  /* ----- voice messages: tap the mic, talk, tap send ----- */
+  function cleanupRec() {
+    clearInterval(recTimer.current);
+    const r = recRef.current;
+    recRef.current = null;
+    if (r) {
+      try { if (r.rec.state !== 'inactive') r.rec.stop(); } catch (e) { /* ignore */ }
+      r.stream.getTracks().forEach((tr) => tr.stop());
+    }
+    setRecording(false);
+    setRecSecs(0);
+  }
+
+  async function startRec() {
+    if (recRef.current) return;
+    setErr('');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mime = pickAudioMime();
+      const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      chunksRef.current = [];
+      rec.ondataavailable = (ev) => { if (ev.data && ev.data.size) chunksRef.current.push(ev.data); };
+      rec.start();
+      recRef.current = { rec, stream, mime: rec.mimeType || mime, startedAt: Date.now() };
+      setRecSecs(0);
+      setRecording(true);
+      recTimer.current = setInterval(() => {
+        const r = recRef.current;
+        if (!r) return;
+        const s = Math.floor((Date.now() - r.startedAt) / 1000);
+        setRecSecs(s);
+        if (s >= 120) finishRec();
+      }, 250);
+    } catch (e) {
+      setErr(t('micDenied'));
+    }
+  }
+
+  async function finishRec() {
+    const r = recRef.current;
+    if (!r) return;
+    const duration = Date.now() - r.startedAt;
+    const mime = r.mime || 'audio/mp4';
+    const blob = await new Promise((resolve) => {
+      r.rec.onstop = () => resolve(new Blob(chunksRef.current, { type: mime }));
+      try { r.rec.stop(); } catch (e) { resolve(new Blob(chunksRef.current, { type: mime })); }
+    });
+    cleanupRec();
+    if (duration < 700 || blob.size < 500) return; // a tap by mistake
+    await sendVoice(blob, mime, duration);
+  }
+
+  async function sendVoice(blob, mime, duration) {
+    if (!thread) return;
+    setBusy(true);
+    setErr('');
+    try {
+      const webm = /webm/i.test(mime);
+      const path = thread + '/' + crypto.randomUUID() + (webm ? '.webm' : '.m4a');
+      const up = await sb.storage.from('voice').upload(path, blob, { contentType: webm ? 'audio/webm' : 'audio/mp4', upsert: false });
+      if (up.error) throw up.error;
+      const ins = await sb.from('dm_messages').insert({
+        thread_id: thread, sender_id: me.id, kind: 'voice', voice_path: path, duration_ms: Math.min(duration, 180000),
+      });
+      if (ins.error) throw ins.error;
+      await load();
+    } catch (e) {
+      setErr(t('voiceError'));
+    }
+    setBusy(false);
   }
 
   if (thread === undefined) return html`<div class="chat"><div class="chathead"><div class="muted">${t('loading')}</div></div></div>`;
   if (thread === null) {
     return html`<div class="chat"><div class="chathead">
-      <div class="pagehead"><${BackBtn} to="friends" /></div>
+      <div class="pagehead"><${BackBtn} to="inbox" /></div>
       <div class="note bad">${t('dmFail')}</div>
     </div></div>`;
   }
 
   const openedByMe = (id) => views.some((v) => v.message_id === id && v.viewer_id === me.id);
   const seenByOther = (id) => views.some((v) => v.message_id === id && v.viewer_id !== me.id);
+  const hasText = text.trim().length > 0;
 
   return html`<div class="chat">
     <div class="wm" aria-hidden="true"></div>
     <div class="chathead">
       <div class="pagehead" style="justify-content:flex-start">
-        <${BackBtn} to="friends" />
+        <${BackBtn} to="inbox" />
+        <div class="avatar tone-pink small">${initial(other ? other.display_name : '?')}</div>
         <div>
-          <div class="h2" style="font-size:22px">${other ? other.display_name : '...'}</div>
+          <div class="h2" style="font-size:20px">${other ? other.display_name : '...'}</div>
           <div class="muted">${other ? '@' + other.username : ''}</div>
         </div>
       </div>
@@ -1386,50 +1666,94 @@ function DMPage({ me, otherId }) {
 
     <div class="msgs">
       ${msgs.length === 0 && html`<div class="muted" style="text-align:center;margin-top:12px">${t('dmEmpty')}</div>`}
-      ${msgs.map((m) => {
+      ${msgs.map((m, i) => {
+        const info = runInfo(msgs, i, 'sender_id');
         const mine = m.sender_id === me.id;
+        const cls = 'bubble' + (mine ? ' mine' : '') + (info.first ? ' first' : '') + (info.last ? ' last' : '') + (m.pending ? ' pending' : '');
+        const time = info.last && html`<div class="btime">${m.pending ? t('pending') : fmtTime(m.created_at, lang)}</div>`;
+        let body;
         if (m.kind === 'text') {
-          return html`<div class=${'bubble' + (mine ? ' mine' : '')}>
-            <div class="btext">${m.body}</div>
-            <div class="btime">${fmtTime(m.created_at, lang)}</div>
+          body = html`<div class=${cls}><div class="btext">${m.body}</div>${time}</div>`;
+        } else if (m.kind === 'voice') {
+          body = html`<div class=${cls + ' voicebubble'}><${VoiceBubble} m=${m} mine=${mine} />${time}</div>`;
+        } else if (mine) {
+          body = html`<div class=${cls}>
+            <div class="btext snapline"><${Icon} name="camera" size=${20} /> ${seenByOther(m.id) ? t('snapSeen') : t('snapDelivered')}</div>${time}
           </div>`;
+        } else if (openedByMe(m.id)) {
+          body = html`<div class=${cls}><div class="btext snapline"><${Icon} name="camera" size=${20} /> ${t('snapOpened')}</div>${time}</div>`;
+        } else {
+          body = html`<button class="snaptile" onClick=${() => openSnap(m)}>
+            <${Icon} name="camera" size=${24} /> <span>${t('tapToView')}</span>
+          </button>`;
         }
-        if (mine) {
-          return html`<div class="bubble mine">
-            <div class="btext snapline"><${Icon} name="camera" size=${20} /> ${seenByOther(m.id) ? t('snapSeen') : t('snapDelivered')}</div>
-            <div class="btime">${fmtTime(m.created_at, lang)}</div>
-          </div>`;
-        }
-        if (openedByMe(m.id)) {
-          return html`<div class="bubble"><div class="btext snapline"><${Icon} name="camera" size=${20} /> ${t('snapOpened')}</div></div>`;
-        }
-        return html`<div class="snaptile"
-          onPointerDown=${(e) => { e.preventDefault(); startView(m); }}
-          onPointerUp=${endView} onPointerLeave=${endView} onPointerCancel=${endView}
-          onContextMenu=${(e) => e.preventDefault()}>
-          <${Icon} name="camera" size=${24} /> <span>${t('holdToView')}</span>
-        </div>`;
+        return html`${info.newDay && html`<${DaySep} iso=${m.created_at} />`}${body}`;
       })}
       <div ref=${endRef}></div>
     </div>
 
     ${err && html`<div class="note bad" style="margin:0 16px;position:relative;z-index:1">${err}</div>`}
-    <form class="composer" onSubmit=${sendText}>
-      <button type="button" class="photobtn" aria-label=${t('sendPhoto')} disabled=${sending} onClick=${() => fileRef.current && fileRef.current.click()}>
-        <${Icon} name="camera" />
-      </button>
-      <input ref=${fileRef} type="file" accept="image/*" style="display:none" onChange=${sendPhoto} />
-      <input class="input" value=${text} maxlength="1000" placeholder=${t('msgPlaceholder')} onInput=${(e) => setText(e.target.value)} />
-      <button class="sendbtn" type="submit" aria-label=${t('send')} disabled=${sending || !text.trim()}>
-        <${Icon} name="send" />
-      </button>
-    </form>
 
-    ${viewer && html`<div class="snapview">
-      <img src=${viewer.url} alt="" draggable="false" />
-      <div class="snapwm" style=${{ backgroundImage: wmUrl('@' + me.username) }}></div>
-      <div class="snapbar">${t('releaseClose')}</div>
+    ${recording
+      ? html`<div class="composer recbar">
+          <button class="roundbtn" aria-label=${t('cancelBtn')} onClick=${cleanupRec}><${Icon} name="trash" /></button>
+          <span class="recdot"></span>
+          <span class="rectime">${fmtDur(recSecs * 1000)}</span>
+          <span class="recword">${t('recording')}</span>
+          <button class="sendbtn" aria-label=${t('send')} onClick=${finishRec}><${Icon} name="send" /></button>
+        </div>`
+      : html`<form class="composer" onSubmit=${sendText}>
+          <button type="button" class="roundbtn" aria-label=${t('sendPhoto')} disabled=${busy} onClick=${() => setShowCam(true)}>
+            <${Icon} name="camera" />
+          </button>
+          <input class="input" value=${text} maxlength="1000" placeholder=${t('msgPlaceholder')} onInput=${(e) => setText(e.target.value)} />
+          ${hasText
+            ? html`<button class="sendbtn" type="submit" aria-label=${t('send')}><${Icon} name="send" /></button>`
+            : html`<button type="button" class="sendbtn" aria-label=${t('voiceMsg')} disabled=${busy} onClick=${startRec}><${Icon} name="mic" /></button>`}
+        </form>`}
+
+    ${viewer && html`<div class="snapview" onClick=${closeSnap}>
+      <img class="snapimg" src=${viewer.url} alt="" draggable="false" />
+      <div class="snapprogress"><span></span></div>
+      <img class="snaplogo" src="logo-mark.png" alt="FENAMI" />
+      <div class="snapbar">${t('tapToClose')}</div>
     </div>`}
+
+    ${showCam && html`<${CameraCapture} onClose=${() => setShowCam(false)}
+      onSend=${async (b) => { setShowCam(false); await sendPhotoBlob(b); }} />`}
+  </div>`;
+}
+
+/* ---------- chat inbox ---------- */
+function Inbox({ me, items, reqCount }) {
+  const { t, lang } = useApp();
+  const preview = (it) => {
+    if (!it.last_at || (!it.last_kind && !it.last_body)) return t('noMessagesYet');
+    if (it.last_kind === 'snap') return t('previewPhoto');
+    if (it.last_kind === 'voice') return t('previewVoice');
+    return it.last_body || '';
+  };
+  return html`<div class="screen">
+    <div class="pagehead">
+      <div class="h2">${t('nav.inbox')}</div>
+      <a class="chip" href="#friends"><${Icon} name="friends" size=${18} /> ${t('friendsBtn')}${reqCount > 0 ? ' · ' + reqCount : ''}</a>
+    </div>
+    ${items.length === 0 && html`<div class="sticker empty"><${Icon} name="chat" /> <span>${t('inboxEmpty')}</span></div>`}
+    <div class="stack">
+      ${items.map((it) => html`<a class="sticker convo" href=${it.kind === 'dm' ? '#dm/' + it.other_id : '#chat/' + it.ref_id}>
+        ${it.kind === 'dm'
+          ? html`<div class="avatar tone-pink small">${initial(it.title)}</div>`
+          : html`<div class="dot tone-green"><${Icon} name="plans" /></div>`}
+        <div class="pinfo">
+          <span class="pname">${it.title}</span>
+          <span class=${'psub' + (it.unread > 0 ? ' strong' : '')}>${preview(it)}</span>
+        </div>
+        <div class="convometa">
+          <span class="psub">${it.last_at ? shortTime(it.last_at, lang, t) : ''}</span>
+          ${it.unread > 0 && html`<span class="unread">${it.unread}</span>`}
+        </div>
+      </a>`)}
+    </div>
   </div>`;
 }
 
@@ -1473,7 +1797,12 @@ function Shell({ me, route }) {
   const [plansErr, setPlansErr] = useState(false);
   const [rels, setRels] = useState([]);
   const [invitedIds, setInvitedIds] = useState([]);
+  const [inbox, setInbox] = useState([]);
+  const [toast, setToast] = useState(null);
+  const prevUnread = useRef(null);
+  const toastTimer = useRef(null);
   const [tab, id] = route.split('/');
+  const { t } = useApp();
 
   useEffect(() => {
     sb.from('places')
@@ -1513,6 +1842,45 @@ function Shell({ me, route }) {
   }, []);
   const incomingCount = rels.filter((r) => r.status === 'pending' && r.addressee_id === me.id).length;
 
+  // the chat inbox: friend chats + plan chats, with unread counts
+  async function loadInbox() {
+    const { data, error } = await sb.rpc('inbox');
+    if (!error && data) setInbox(data);
+  }
+  useEffect(() => {
+    loadInbox();
+    const timer = setInterval(loadInbox, 15000);
+    const channel = sb.channel('inbox-' + me.id)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'dm_messages' }, () => loadInbox())
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, () => loadInbox())
+      .subscribe();
+    return () => { clearInterval(timer); sb.removeChannel(channel); };
+  }, []);
+
+  const unreadTotal = inbox.reduce((sum, it) => sum + (it.unread || 0), 0);
+
+  // in-app notification when a new message arrives in a chat you are not looking at
+  useEffect(() => {
+    const now = {};
+    inbox.forEach((it) => { now[it.kind + it.ref_id] = it.unread || 0; });
+    if (prevUnread.current) {
+      const grown = inbox.find((it) => (it.unread || 0) > (prevUnread.current[it.kind + it.ref_id] || 0));
+      const watching = grown && ((grown.kind === 'dm' && tab === 'dm' && id === grown.other_id)
+        || (grown.kind === 'plan' && tab === 'chat' && id === grown.ref_id));
+      if (grown && !watching) {
+        const text = grown.last_kind === 'snap' ? t('previewPhoto') : grown.last_kind === 'voice' ? t('previewVoice') : (grown.last_body || '');
+        setToast({ title: grown.title, text, href: grown.kind === 'dm' ? '#dm/' + grown.other_id : '#chat/' + grown.ref_id });
+        clearTimeout(toastTimer.current);
+        toastTimer.current = setTimeout(() => setToast(null), 5000);
+      }
+    }
+    prevUnread.current = now;
+    try {
+      if (navigator.setAppBadge) { if (unreadTotal > 0) navigator.setAppBadge(unreadTotal); else navigator.clearAppBadge(); }
+    } catch (e) { /* not supported */ }
+    document.title = unreadTotal > 0 ? '(' + unreadTotal + ') FENAMI' : 'FENAMI';
+  }, [inbox]);
+
   let body;
   let navTab = tab;
   let showNav = true;
@@ -1520,13 +1888,21 @@ function Shell({ me, route }) {
   else if (tab === 'plans') body = html`<${PlansTab} me=${me} plans=${plans} err=${plansErr} invitedIds=${invitedIds} />`;
   else if (tab === 'plan' && id) { body = html`<${PlanPage} me=${me} id=${id} rels=${rels} reloadPlans=${loadPlans} />`; navTab = 'plans'; }
   else if (tab === 'new') { body = html`<${NewPlan} me=${me} places=${places} presetPlaceId=${id || null} reloadPlans=${loadPlans} />`; navTab = 'plans'; showNav = false; }
-  else if (tab === 'chat' && id) { body = html`<${ChatPage} me=${me} id=${id} />`; navTab = 'plans'; showNav = false; }
-  else if (tab === 'dm' && id) { body = html`<${DMPage} me=${me} otherId=${id} />`; navTab = 'friends'; showNav = false; }
-  else if (tab === 'friends') body = html`<${FriendsTab} me=${me} rels=${rels} reloadRels=${loadRels} />`;
+  else if (tab === 'chat' && id) { body = html`<${ChatPage} me=${me} id=${id} refreshInbox=${loadInbox} />`; navTab = 'inbox'; showNav = false; }
+  else if (tab === 'dm' && id) { body = html`<${DMPage} me=${me} otherId=${id} refreshInbox=${loadInbox} />`; navTab = 'inbox'; showNav = false; }
+  else if (tab === 'inbox') body = html`<${Inbox} me=${me} items=${inbox} reqCount=${incomingCount} />`;
+  else if (tab === 'friends') { body = html`<${FriendsTab} me=${me} rels=${rels} reloadRels=${loadRels} />`; navTab = 'inbox'; }
   else if (tab === 'profile') body = html`<${Profile} me=${me} />`;
   else { body = html`<${Home} me=${me} places=${places} plans=${plans} loadError=${loadError} />`; navTab = 'home'; }
 
-  return html`<div style="height:100%">${body}${showNav && html`<${Nav} tab=${navTab} badge=${incomingCount} />`}</div>`;
+  return html`<div style="height:100%">
+    ${body}
+    ${showNav && html`<${Nav} tab=${navTab} badge=${unreadTotal + incomingCount} />`}
+    ${toast && html`<a class="toast" href=${toast.href} onClick=${() => setToast(null)}>
+      <div class="dot tone-pink"><${Icon} name="chat" /></div>
+      <div class="pinfo"><span class="pname">${toast.title}</span><span class="psub">${toast.text}</span></div>
+    </a>`}
+  </div>`;
 }
 
 /* ---------- app root ---------- */

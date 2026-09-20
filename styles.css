@@ -292,3 +292,82 @@ a.mini { display: inline-flex; align-items: center; justify-content: center; }
   position: absolute; top: calc(16px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); padding: 6px 14px; border-radius: 16px;
   background: rgba(0, 0, 0, 0.55); color: #fff; font-size: 14px; font-weight: 600; white-space: nowrap;
 }
+
+/* ---- professional chat ---- */
+.bubble { border-radius: 20px; margin-top: 0; }
+.bubble.last { border-radius: 20px 20px 20px 6px; }
+.bubble.mine.last { border-radius: 20px 20px 6px 20px; }
+[dir='rtl'] .bubble.last { border-radius: 20px 20px 6px 20px; }
+[dir='rtl'] .bubble.mine.last { border-radius: 20px 20px 20px 6px; }
+.bubble:not(.first) { margin-top: -7px; }
+.bubble.pending { opacity: 0.6; }
+.chatwho { display: block; min-width: 0; }
+.daysep { align-self: center; margin: 4px 0; }
+.daysep span { display: inline-block; padding: 4px 12px; border-radius: 14px; background: var(--lpink); font-size: 13px; font-weight: 600; }
+.roundbtn {
+  flex: none; width: 52px; height: 52px; padding: 0; border: 2px solid var(--ink); border-radius: 50%; background: var(--lgreen);
+  box-shadow: 0 3px 0 var(--ink); display: flex; align-items: center; justify-content: center;
+}
+.roundbtn:disabled { opacity: 0.55; }
+.recbar { gap: 12px; }
+.recdot { width: 14px; height: 14px; border-radius: 50%; background: #e0334f; animation: blink 1s infinite; flex: none; }
+.rectime { font-family: var(--display); font-weight: 800; font-size: 22px; min-width: 54px; }
+.recword { flex: 1; font-size: 14px; color: var(--ink2); }
+@keyframes blink { 50% { opacity: 0.25; } }
+.voicebubble { min-width: 230px; }
+.voice { display: flex; align-items: center; gap: 10px; }
+.voiceplay {
+  flex: none; width: 40px; height: 40px; padding: 0; border: 2px solid var(--ink); border-radius: 50%; background: var(--card);
+  display: flex; align-items: center; justify-content: center;
+}
+.voiceplay:disabled { opacity: 0.5; }
+.wave { flex: 1; display: flex; align-items: center; gap: 3px; height: 36px; }
+.wave span { flex: 1; min-width: 2px; border-radius: 2px; background: rgba(20, 48, 15, 0.3); }
+.wave span.on { background: var(--ink); }
+.voicetime { flex: none; font-size: 13px; font-weight: 600; }
+.snaptile { width: auto; text-align: start; font-family: inherit; color: var(--ink); cursor: pointer; }
+.convo { display: flex; align-items: center; gap: 12px; padding: 12px; box-shadow: 0 3px 0 var(--ink); }
+.convo .avatar { flex: none; }
+.convometa { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.psub.strong { color: var(--ink); font-weight: 600; }
+.unread {
+  min-width: 24px; height: 24px; padding: 0 7px; border: 2px solid var(--ink); border-radius: 12px; background: var(--pink);
+  font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center;
+}
+.toast {
+  position: fixed; top: calc(12px + env(safe-area-inset-top)); left: 12px; right: 12px; z-index: 9000; max-width: 496px; margin: 0 auto;
+  display: flex; align-items: center; gap: 12px; padding: 10px 14px; border: 2px solid var(--ink); border-radius: 22px;
+  background: var(--card); box-shadow: 0 4px 0 var(--ink); animation: drop 0.25s ease-out;
+}
+@keyframes drop { from { transform: translateY(-30px); opacity: 0; } }
+
+/* ---- in-app camera + photo viewer ---- */
+.cam { position: fixed; inset: 0; z-index: 9500; background: #000; }
+.camvideo, .camshot { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.camvideo.mirror { transform: scaleX(-1); }
+.camtop { position: absolute; top: calc(14px + env(safe-area-inset-top)); left: 16px; right: 16px; display: flex; justify-content: space-between; }
+.camround {
+  width: 48px; height: 48px; padding: 0; border: 0; border-radius: 50%; background: rgba(0, 0, 0, 0.45); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+}
+.cambar {
+  position: absolute; left: 0; right: 0; bottom: 0; padding: 20px 28px calc(28px + env(safe-area-inset-bottom));
+  display: flex; align-items: center; justify-content: space-between;
+}
+.camspacer { width: 48px; }
+.shutter { width: 78px; height: 78px; padding: 0; border: 4px solid #fff; border-radius: 50%; background: transparent; display: flex; align-items: center; justify-content: center; }
+.shutter span { width: 58px; height: 58px; border-radius: 50%; background: #fff; }
+.shutter:active span { background: var(--pink); }
+.camtext { border: 0; background: rgba(0, 0, 0, 0.45); color: #fff; height: 48px; padding: 0 20px; border-radius: 24px; font-size: 16px; font-weight: 600; }
+.camsend {
+  width: 68px; height: 68px; padding: 0; border: 3px solid #fff; border-radius: 50%; background: var(--pink); color: var(--ink);
+  display: flex; align-items: center; justify-content: center;
+}
+.camerr { position: absolute; left: 20px; right: 20px; top: 40%; padding: 14px; border-radius: 16px; background: rgba(0, 0, 0, 0.6); color: #fff; text-align: center; font-size: 15px; }
+.snapview { pointer-events: auto; cursor: pointer; }
+.snapimg { max-width: 100%; max-height: 100%; object-fit: contain; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+.snaplogo { position: absolute; left: 14px; bottom: calc(14px + env(safe-area-inset-bottom)); width: 64px; height: auto; opacity: 0.92; pointer-events: none; }
+.snapprogress { position: absolute; top: calc(8px + env(safe-area-inset-top)); left: 16px; right: 16px; height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.3); overflow: hidden; }
+.snapprogress span { display: block; height: 100%; background: #fff; animation: shrink 10s linear forwards; }
+@keyframes shrink { from { width: 100%; } to { width: 0; } }
+.snapbar { top: calc(24px + env(safe-area-inset-top)); }
