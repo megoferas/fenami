@@ -1,7 +1,7 @@
 import { html, render, useState, useEffect, useMemo, useRef } from 'https://cdn.jsdelivr.net/npm/htm@3.1.1/preact/standalone.module.js';
-import { SUPABASE_URL, SUPABASE_KEY, MAP_STYLE, MAP_CENTER, MAPLIBRE_JS, MAPLIBRE_CSS } from './config.js';
-import { T } from './i18n.js';
-import { Icon, iconSvg, CATS, CAT_ORDER, INTERESTS } from './icons.js';
+import { SUPABASE_URL, SUPABASE_KEY, MAP_STYLE, MAP_CENTER, MAPLIBRE_JS, MAPLIBRE_CSS } from './config.js?v=4';
+import { T } from './i18n.js?v=4';
+import { Icon, iconSvg, CATS, CAT_ORDER, INTERESTS } from './icons.js?v=4';
 
 if (!window.supabase) throw new Error('The Supabase library did not load (cdn.jsdelivr.net)');
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -25,14 +25,20 @@ function loadMapLib() {
   }
   return mapLibPromise;
 }
+
 // Shared translation state. App() refreshes it on every render, so all screens see the current language.
 let APP = null;
 const useApp = () => APP;
 
 /* ---------- helpers ---------- */
+const go = (r) => { location.hash = r; };
 const pname = (p, lang) => (lang === 'ar' ? p.name_ar || p.name : p.name);
 const today = () => new Date().toISOString().slice(0, 10);
 const INTEREST_MAP = Object.fromEntries(INTERESTS.map((i) => [i.id, i.cats]));
+const ACTIVITIES = ['coffee', 'food', 'gaming', 'cinema', 'padel', 'football', 'karting', 'entertainment', 'outdoors', 'other'];
+const actIcon = (a) => (CATS[a] ? CATS[a].icon : 'star');
+const actTone = (a) => (CATS[a] ? CATS[a].tone : 'pink');
+const TONES = ['pink', 'green', 'pink', 'green'];
 
 function hash(str) {
   let x = 2166136261;
@@ -53,6 +59,46 @@ function ageFrom(iso) {
   return a;
 }
 
+const locale = (lang) => (lang === 'ar' ? 'ar-EG' : 'en-GB');
+const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+
+function fmtWhen(iso, lang, t) {
+  const d = new Date(iso);
+  const time = d.toLocaleTimeString(locale(lang), { hour: 'numeric', minute: '2-digit' });
+  const diff = Math.round((startOfDay(d) - startOfDay(new Date())) / 86400000);
+  let day;
+  if (diff === 0) day = t('today');
+  else if (diff === 1) day = t('tomorrow');
+  else day = d.toLocaleDateString(locale(lang), { weekday: 'short', day: 'numeric', month: 'short' });
+  return day + ' · ' + time;
+}
+
+function fmtTime(iso, lang) {
+  return new Date(iso).toLocaleTimeString(locale(lang), { hour: 'numeric', minute: '2-digit' });
+}
+
+function toLocalInput(d) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+}
+function defaultWhen() {
+  const d = new Date(Date.now() + 2 * 3600 * 1000);
+  d.setMinutes(0, 0, 0);
+  return toLocalInput(d);
+}
+
+const initial = (name) => ((name || '?').trim().charAt(0) || '?').toUpperCase();
+
+function joinError(t, msg) {
+  if (/full/i.test(msg)) return t('errFull');
+  if (/closed/i.test(msg)) return t('errClosed');
+  if (/not available/i.test(msg)) return t('errNotVisible');
+  return msg;
+}
+
+const PLAN_COLS =
+  'id,title,activity,starts_at,capacity,visibility,status,host_id,place:places(id,name,name_ar,category),members:plan_members(user_id)';
+
 /* ---------- small pieces ---------- */
 function Splash() {
   return html`<div class="center"><img src="logo.jpg" alt="FENAMI" /></div>`;
@@ -70,6 +116,22 @@ function PlaceCard({ p }) {
   </a>`;
 }
 
+function PlanCard({ p, meId }) {
+  const { t, lang } = useApp();
+  const members = p.members || [];
+  const n = members.length;
+  const joined = members.some((m) => m.user_id === meId);
+  const label = joined ? t('joined') : n >= p.capacity ? t('full') : n + '/' + p.capacity;
+  return html`<a class="sticker pcard" href=${'#plan/' + p.id}>
+    <span class=${'dot tone-' + actTone(p.activity)}><${Icon} name=${actIcon(p.activity)} /></span>
+    <span class="pinfo">
+      <span class="pname">${p.title}</span>
+      <span class="psub">${fmtWhen(p.starts_at, lang, t)}${p.place ? ' · ' + pname(p.place, lang) : ''}</span>
+    </span>
+    <span class=${'spots' + (joined ? ' in' : '')}>${label}</span>
+  </a>`;
+}
+
 function Nav({ tab }) {
   const { t } = useApp();
   const items = ['home', 'explore', 'plans', 'friends', 'profile'];
@@ -81,6 +143,11 @@ function Nav({ tab }) {
       </a>`
     )}
   </nav>`;
+}
+
+function BackBtn({ to }) {
+  const { t } = useApp();
+  return html`<a class="backbtn" href=${'#' + to} aria-label=${t('back')}><${Icon} name="back" /></a>`;
 }
 
 /* ---------- auth ---------- */
@@ -108,7 +175,7 @@ function AuthScreen() {
       ${lang === 'ar' ? 'English' : 'العربية'}
     </button>
     <img src="logo.jpg" alt="FENAMI" />
-    <div class="tag">${t('tagline')}</div>
+    <div class="tag-line">${t('tagline')}</div>
     <form class="sticker card" onSubmit=${submit}>
       <label class="label">${t('email')}
         <input class="input" type="email" required autocomplete="email" value=${email}
@@ -209,11 +276,16 @@ function Onboarding({ session, onDone }) {
 }
 
 /* ---------- home ---------- */
-function Home({ me, places, loadError }) {
+function Home({ me, places, plans, loadError }) {
   const { t } = useApp();
   const now = today();
 
   const fresh = useMemo(() => places.filter((p) => p.is_new_until && p.is_new_until >= now).slice(0, 6), [places]);
+
+  const soon = useMemo(() => {
+    const limit = Date.now() + 24 * 3600 * 1000;
+    return plans.filter((p) => new Date(p.starts_at).getTime() < limit).slice(0, 3);
+  }, [plans]);
 
   const picks = useMemo(() => {
     const wanted = new Set();
@@ -237,7 +309,10 @@ function Home({ me, places, loadError }) {
 
     <div class="block">
       <div class="h2">${t('tonight')}</div>
-      <div class="sticker empty"><${Icon} name="plans" /> <span>${t('tonightEmpty')}</span></div>
+      ${soon.length > 0
+        ? html`<div class="stack">${soon.map((p) => html`<${PlanCard} p=${p} meId=${me.id} />`)}</div>`
+        : html`<div class="sticker empty"><${Icon} name="plans" /> <span>${t('tonightEmpty')}</span></div>`}
+      <a class="btn btn-small" href="#new"><${Icon} name="plus" size=${20} /> ${t('createPlan')}</a>
     </div>
 
     ${loadError && html`<div class="note bad">${t('loadError')}</div>`}
@@ -281,7 +356,6 @@ function Explore({ places, initialId, loadError }) {
 
   const selected = useMemo(() => places.find((p) => p.id === sel) || null, [places, sel]);
 
-  // create the map when the map view is shown
   useEffect(() => {
     if (view !== 'map') return;
     let cancelled = false;
@@ -311,7 +385,6 @@ function Explore({ places, initialId, loadError }) {
     };
   }, [view]);
 
-  // draw the sticker pins
   useEffect(() => {
     const map = mapRef.current;
     if (!map || view !== 'map') return;
@@ -328,7 +401,6 @@ function Explore({ places, initialId, loadError }) {
     });
   }, [filtered, sel, view, mapReady, lang]);
 
-  // fly to the selected place
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !selected) return;
@@ -388,8 +460,351 @@ function Explore({ places, initialId, loadError }) {
           <${Icon} name="phone" size=${18} /> ${t('call')}
         </a>`}
       </div>
-      <button class="btn btn-small" disabled>${t('planHere')}</button>
+      <a class="btn btn-small" href=${'#new/' + selected.id}><${Icon} name="plus" size=${18} /> ${t('planHere')}</a>
     </div>`}
+  </div>`;
+}
+
+/* ---------- plans ---------- */
+function PlansTab({ me, plans, err }) {
+  const { t } = useApp();
+  const mine = plans.filter((p) => (p.members || []).some((m) => m.user_id === me.id));
+  const others = plans.filter((p) => !mine.includes(p));
+  return html`<div class="screen">
+    <div class="pagehead">
+      <div class="h2">${t('nav.plans')}</div>
+    </div>
+    <a class="btn" href="#new"><${Icon} name="plus" size=${22} /> ${t('createPlan')}</a>
+    ${err && html`<div class="note bad">${t('plansError')}</div>`}
+    ${plans.length === 0 && !err && html`<div class="sticker empty"><${Icon} name="plans" /> <span>${t('noPlans')}</span></div>`}
+    ${mine.length > 0 && html`<div class="block">
+      <div class="h2" style="font-size:22px">${t('yourPlans')}</div>
+      <div class="stack">${mine.map((p) => html`<${PlanCard} p=${p} meId=${me.id} />`)}</div>
+    </div>`}
+    ${others.length > 0 && html`<div class="block">
+      <div class="h2" style="font-size:22px">${t('comingUp')}</div>
+      <div class="stack">${others.map((p) => html`<${PlanCard} p=${p} meId=${me.id} />`)}</div>
+    </div>`}
+  </div>`;
+}
+
+function PlanPage({ me, id, reloadPlans }) {
+  const { t, lang } = useApp();
+  const [plan, setPlan] = useState(undefined);
+  const [members, setMembers] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  async function load() {
+    const [a, b] = await Promise.all([
+      sb.from('plans')
+        .select('id,title,activity,description,starts_at,capacity,visibility,status,host_id,place:places(id,name,name_ar,category),host:profiles!plans_host_id_fkey(display_name,username)')
+        .eq('id', id).maybeSingle(),
+      sb.from('plan_members')
+        .select('user_id,joined_at,profile:profiles(display_name,username)')
+        .eq('plan_id', id).order('joined_at'),
+    ]);
+    setPlan(a.data || null);
+    setMembers(b.data || []);
+  }
+  useEffect(() => { setPlan(undefined); load(); }, [id]);
+
+  async function act(fn) {
+    setBusy(true);
+    setErr('');
+    const res = await fn();
+    setBusy(false);
+    if (res && res.error) { setErr(joinError(t, res.error.message)); return false; }
+    await Promise.all([load(), reloadPlans()]);
+    return true;
+  }
+
+  const join = () => act(() => sb.rpc('join_plan', { p_plan_id: id }));
+  const leave = () => {
+    if (!confirm(t('confirmLeave'))) return;
+    act(() => sb.from('plan_members').delete().eq('plan_id', id).eq('user_id', me.id));
+  };
+  const cancel = async () => {
+    if (!confirm(t('confirmCancel'))) return;
+    const ok = await act(() => sb.from('plans').update({ status: 'cancelled' }).eq('id', id));
+    if (ok) go('plans');
+  };
+
+  if (plan === undefined) return html`<div class="screen"><div class="muted">${t('loading')}</div></div>`;
+  if (plan === null) {
+    return html`<div class="screen">
+      <div class="pagehead"><${BackBtn} to="plans" /></div>
+      <div class="note bad">${t('notFound')}</div>
+    </div>`;
+  }
+
+  const n = members.length;
+  const joined = members.some((m) => m.user_id === me.id);
+  const isHost = plan.host_id === me.id;
+  const isFull = n >= plan.capacity;
+  const cancelled = plan.status === 'cancelled';
+  const empties = Math.min(Math.max(plan.capacity - n, 0), 4);
+
+  return html`<div class="screen">
+    <div class="pagehead"><${BackBtn} to="plans" /></div>
+
+    <div class="sticker hero">
+      <div class="herorow">
+        <span class=${'dot tone-' + (actTone(plan.activity) === 'pink' ? 'green' : 'pink')}><${Icon} name=${actIcon(plan.activity)} /></span>
+        <span class="muted" style="color:var(--ink)">${t('cat.' + plan.activity)}</span>
+      </div>
+      <div class="title">${plan.title}</div>
+      ${plan.place && html`<div class="herorow"><${Icon} name="pin" size=${22} />
+        <a href=${'#explore/' + plan.place.id}>${pname(plan.place, lang)}</a></div>`}
+      <div class="herorow"><${Icon} name="clock" size=${22} /> <span>${fmtWhen(plan.starts_at, lang, t)}</span></div>
+      <div class="tags">
+        <span class="tag"><${Icon} name="lock" size=${16} /> ${t('vis.' + plan.visibility)}</span>
+        <span class="tag green">${n}/${plan.capacity} ${t('going')}</span>
+      </div>
+      ${plan.host && html`<div class="muted" style="color:var(--ink)">${t('hostedBy')} ${plan.host.display_name}</div>`}
+    </div>
+
+    ${cancelled && html`<div class="note bad">${t('cancelled')}</div>`}
+
+    <div class="sticker card">
+      <div class="h2" style="font-size:22px">${t('whosIn')}</div>
+      <div class="avatars">
+        ${members.map((m, i) => {
+          const name = m.profile ? m.profile.display_name : '?';
+          return html`<div class="avcol">
+            <div class=${'avatar tone-' + TONES[i % TONES.length]}>${initial(name)}</div>
+            <div class="avname">${name}</div>
+          </div>`;
+        })}
+        ${Array.from({ length: empties }).map(() => html`<div class="avcol">
+          <div class="avatar empty"><${Icon} name="plus" size=${20} /></div>
+          <div class="avname">${t('open')}</div>
+        </div>`)}
+      </div>
+    </div>
+
+    ${err && html`<div class="note bad">${err}</div>`}
+
+    ${!cancelled && html`<div class="stack">
+      ${joined
+        ? html`<a class="btn" href=${'#chat/' + id}><${Icon} name="chat" size=${22} /> ${t('openChat')}</a>`
+        : html`<div class="note">${t('chatWhenJoin')}</div>
+               <button class="btn" disabled=${busy || isFull} onClick=${join}>
+                 ${isFull ? t('full') : busy ? t('loading') : t('join')}
+               </button>`}
+      ${joined && !isHost && html`<button class="btn btn-dark btn-small" disabled=${busy} onClick=${leave}>${t('leave')}</button>`}
+      ${isHost && html`<button class="btn btn-dark btn-small" disabled=${busy} onClick=${cancel}>${t('cancelPlan')}</button>`}
+    </div>`}
+  </div>`;
+}
+
+function NewPlan({ me, places, presetPlaceId, reloadPlans }) {
+  const { t, lang } = useApp();
+  const [title, setTitle] = useState('');
+  const [activity, setActivity] = useState('coffee');
+  const [placeId, setPlaceId] = useState(presetPlaceId || null);
+  const [pq, setPq] = useState('');
+  const [when, setWhen] = useState(defaultWhen());
+  const [cap, setCap] = useState(5);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const place = useMemo(() => places.find((p) => p.id === placeId) || null, [places, placeId]);
+  useEffect(() => {
+    if (presetPlaceId) setPlaceId(presetPlaceId);
+  }, [presetPlaceId]);
+  useEffect(() => {
+    if (place && ACTIVITIES.includes(place.category)) setActivity(place.category);
+  }, [placeId]);
+
+  const matches = useMemo(() => {
+    const s = pq.trim().toLowerCase();
+    if (!s) return [];
+    return places.filter((p) => (p.name + ' ' + (p.name_ar || '')).toLowerCase().includes(s)).slice(0, 6);
+  }, [places, pq]);
+
+  async function submit(e) {
+    e.preventDefault();
+    setErr('');
+    const ttl = title.trim();
+    if (ttl.length < 2 || ttl.length > 60) return setErr(t('errPlanTitle'));
+    if (!placeId) return setErr(t('errPlanPlace'));
+    const startsAt = new Date(when);
+    if (isNaN(startsAt) || startsAt.getTime() <= Date.now()) return setErr(t('errPlanWhen'));
+
+    setBusy(true);
+    const id = crypto.randomUUID();
+    const { error } = await sb.from('plans').insert({
+      id, host_id: me.id, kind: 'plan', title: ttl, activity, place_id: placeId,
+      starts_at: startsAt.toISOString(), capacity: cap, visibility: 'public',
+    });
+    if (error) { setBusy(false); return setErr(error.message); }
+    await reloadPlans();
+    setBusy(false);
+    go('plan/' + id);
+  }
+
+  return html`<form class="page" onSubmit=${submit}>
+    <div class="pagehead">
+      <${BackBtn} to="plans" />
+      <div class="h2">${t('createPlan')}</div>
+    </div>
+
+    <label class="label">${t('newTitle')}
+      <input class="input" value=${title} maxlength="60" placeholder=${t('newTitleHint')}
+        onInput=${(e) => setTitle(e.target.value)} />
+    </label>
+
+    <div class="block">
+      <div class="label">${t('doing')}</div>
+      <div class="chips">
+        ${ACTIVITIES.map((a) => html`<button type="button" class=${'chip' + (activity === a ? ' on' : '')}
+          onClick=${() => setActivity(a)}><${Icon} name=${actIcon(a)} size=${18} /> ${t('cat.' + a)}</button>`)}
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="label">${t('where')}</div>
+      ${place
+        ? html`<div class="chips"><button type="button" class="chip on" onClick=${() => setPlaceId(null)}>
+            <${Icon} name="pin" size=${18} /> ${pname(place, lang)} <${Icon} name="close" size=${16} /></button></div>`
+        : html`<input class="input" value=${pq} placeholder=${t('placeSearch')} onInput=${(e) => setPq(e.target.value)} />
+               <div class="stack">
+                 ${matches.map((p) => html`<button type="button" class="sticker pcard" onClick=${() => { setPlaceId(p.id); setPq(''); }}>
+                   <span class=${'dot tone-' + (CATS[p.category] || CATS.sports).tone}><${Icon} name=${(CATS[p.category] || CATS.sports).icon} /></span>
+                   <span class="pinfo"><span class="pname">${pname(p, lang)}</span><span class="psub">${t('cat.' + p.category)}</span></span>
+                 </button>`)}
+               </div>`}
+    </div>
+
+    <label class="label">${t('when')}
+      <input class="input" type="datetime-local" value=${when} min=${toLocalInput(new Date())}
+        onInput=${(e) => setWhen(e.target.value)} />
+    </label>
+
+    <div class="block">
+      <div class="label">${t('howMany')}</div>
+      <div class="stepper">
+        <button type="button" aria-label="-" onClick=${() => setCap(Math.max(2, cap - 1))}><${Icon} name="minus" /></button>
+        <span class="num">${cap}</span>
+        <button type="button" aria-label="+" onClick=${() => setCap(Math.min(30, cap + 1))}><${Icon} name="plus" /></button>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="label">${t('whoJoin')}</div>
+      <div class="chips">
+        <button type="button" class="chip on">${t('vis.public')}</button>
+        <button type="button" class="chip" disabled>${t('vis.friends')}</button>
+        <button type="button" class="chip" disabled>${t('vis.invite')}</button>
+      </div>
+      <div class="hint">${t('publicHint')}</div>
+    </div>
+
+    ${err && html`<div class="note bad">${err}</div>`}
+    <button class="btn" type="submit" disabled=${busy}>${busy ? t('loading') : t('create')}</button>
+  </form>`;
+}
+
+/* ---------- chat ---------- */
+function ChatPage({ me, id }) {
+  const { t, lang } = useApp();
+  const [plan, setPlan] = useState(undefined);
+  const [members, setMembers] = useState([]);
+  const [msgs, setMsgs] = useState([]);
+  const [text, setText] = useState('');
+  const [sending, setSending] = useState(false);
+  const [err, setErr] = useState('');
+  const endRef = useRef(null);
+
+  async function load() {
+    const nowIso = new Date().toISOString();
+    const [a, b, c] = await Promise.all([
+      sb.from('plans').select('id,title,status').eq('id', id).maybeSingle(),
+      sb.from('plan_members').select('user_id,profile:profiles(display_name)').eq('plan_id', id),
+      sb.from('messages').select('id,user_id,body,created_at').eq('plan_id', id)
+        .gt('expires_at', nowIso).order('created_at').limit(300),
+    ]);
+    setPlan(a.data || null);
+    setMembers(b.data || []);
+    if (!c.error) setMsgs(c.data || []);
+  }
+
+  useEffect(() => {
+    setPlan(undefined);
+    load();
+    const channel = sb.channel('chat-' + id)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: 'plan_id=eq.' + id }, () => load())
+      .subscribe();
+    const poll = setInterval(load, 6000); // backup in case realtime is slow
+    return () => { clearInterval(poll); sb.removeChannel(channel); };
+  }, [id]);
+
+  useEffect(() => {
+    if (endRef.current) endRef.current.scrollIntoView({ block: 'end' });
+  }, [msgs.length]);
+
+  const names = useMemo(() => {
+    const m = {};
+    members.forEach((x) => { m[x.user_id] = x.profile ? x.profile.display_name : '?'; });
+    return m;
+  }, [members]);
+
+  async function send(e) {
+    e.preventDefault();
+    const body = text.trim();
+    if (!body || sending) return;
+    setSending(true);
+    setErr('');
+    setText('');
+    const { error } = await sb.from('messages').insert({ plan_id: id, user_id: me.id, body });
+    setSending(false);
+    if (error) { setErr(error.message); setText(body); return; }
+    load();
+  }
+
+  const isMember = members.some((m) => m.user_id === me.id);
+
+  if (plan === undefined) return html`<div class="chat"><div class="chathead"><div class="muted">${t('loading')}</div></div></div>`;
+  if (plan === null) {
+    return html`<div class="chat"><div class="chathead">
+      <div class="pagehead"><${BackBtn} to="plans" /></div>
+      <div class="note bad">${t('notFound')}</div>
+    </div></div>`;
+  }
+
+  return html`<div class="chat">
+    <div class="wm" aria-hidden="true"></div>
+    <div class="chathead">
+      <div class="pagehead" style="justify-content:flex-start">
+        <${BackBtn} to=${'plan/' + id} />
+        <div>
+          <div class="h2" style="font-size:22px">${plan.title}</div>
+          <div class="muted">${members.map((m) => (m.profile ? m.profile.display_name : '?')).join(', ')}</div>
+        </div>
+      </div>
+      <div class="chatnote"><${Icon} name="clock" size=${18} /> ${t('chatNotice')}</div>
+    </div>
+
+    <div class="msgs">
+      ${!isMember && html`<div class="note">${t('chatNeedJoin')}</div>`}
+      ${isMember && msgs.length === 0 && html`<div class="muted" style="text-align:center;margin-top:12px">${t('noMessages')}</div>`}
+      ${msgs.map((m) => html`<div class=${'bubble' + (m.user_id === me.id ? ' mine' : '')}>
+        <div class="bname">${names[m.user_id] || '...'}</div>
+        <div class="btext">${m.body}</div>
+        <div class="btime">${fmtTime(m.created_at, lang)}</div>
+      </div>`)}
+      <div ref=${endRef}></div>
+    </div>
+
+    ${err && html`<div class="note bad" style="margin:0 16px;position:relative;z-index:1">${err}</div>`}
+    ${isMember && html`<form class="composer" onSubmit=${send}>
+      <input class="input" value=${text} maxlength="1000" placeholder=${t('msgPlaceholder')}
+        onInput=${(e) => setText(e.target.value)} />
+      <button class="sendbtn" type="submit" aria-label=${t('send')} disabled=${sending || !text.trim()}>
+        <${Icon} name="send" />
+      </button>
+    </form>`}
   </div>`;
 }
 
@@ -426,6 +841,8 @@ function Profile({ me }) {
 function Shell({ me, route }) {
   const [places, setPlaces] = useState([]);
   const [loadError, setLoadError] = useState(false);
+  const [plans, setPlans] = useState([]);
+  const [plansErr, setPlansErr] = useState(false);
   const [tab, id] = route.split('/');
 
   useEffect(() => {
@@ -439,13 +856,33 @@ function Shell({ me, route }) {
       });
   }, []);
 
-  let body;
-  if (tab === 'explore') body = html`<${Explore} places=${places} initialId=${id || null} loadError=${loadError} />`;
-  else if (tab === 'plans' || tab === 'friends') body = html`<${ComingSoon} tab=${tab} />`;
-  else if (tab === 'profile') body = html`<${Profile} me=${me} />`;
-  else body = html`<${Home} me=${me} places=${places} loadError=${loadError} />`;
+  async function loadPlans() {
+    const since = new Date(Date.now() - 3 * 3600 * 1000).toISOString();
+    const { data, error } = await sb.from('plans').select(PLAN_COLS)
+      .eq('status', 'open').gte('starts_at', since).order('starts_at').limit(100);
+    if (error) { setPlansErr(true); return; }
+    setPlansErr(false);
+    setPlans(data || []);
+  }
+  useEffect(() => {
+    loadPlans();
+    const timer = setInterval(loadPlans, 30000);
+    return () => clearInterval(timer);
+  }, []);
 
-  return html`<div style="height:100%">${body}<${Nav} tab=${tab} /></div>`;
+  let body;
+  let navTab = tab;
+  let showNav = true;
+  if (tab === 'explore') body = html`<${Explore} places=${places} initialId=${id || null} loadError=${loadError} />`;
+  else if (tab === 'plans') body = html`<${PlansTab} me=${me} plans=${plans} err=${plansErr} />`;
+  else if (tab === 'plan' && id) { body = html`<${PlanPage} me=${me} id=${id} reloadPlans=${loadPlans} />`; navTab = 'plans'; }
+  else if (tab === 'new') { body = html`<${NewPlan} me=${me} places=${places} presetPlaceId=${id || null} reloadPlans=${loadPlans} />`; navTab = 'plans'; showNav = false; }
+  else if (tab === 'chat' && id) { body = html`<${ChatPage} me=${me} id=${id} />`; navTab = 'plans'; showNav = false; }
+  else if (tab === 'friends') body = html`<${ComingSoon} tab=${tab} />`;
+  else if (tab === 'profile') body = html`<${Profile} me=${me} />`;
+  else { body = html`<${Home} me=${me} places=${places} plans=${plans} loadError=${loadError} />`; navTab = 'home'; }
+
+  return html`<div style="height:100%">${body}${showNav && html`<${Nav} tab=${navTab} />`}</div>`;
 }
 
 /* ---------- app root ---------- */
