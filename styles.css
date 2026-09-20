@@ -271,3 +271,24 @@ input[type='datetime-local']::-webkit-date-and-time-value, input[type='date']::-
 .textarea { height: auto; min-height: 96px; padding: 12px 18px; border-radius: 22px; resize: none; line-height: 1.4; font-family: inherit; }
 .person-row { display: flex; align-items: center; gap: 12px; }
 .avatar.small { width: 42px; height: 42px; font-size: 18px; flex: none; }
+
+/* ---- friend chat + photos ---- */
+a.mini { display: inline-flex; align-items: center; justify-content: center; }
+.photobtn {
+  flex: none; width: 52px; height: 52px; padding: 0; border: 2px solid var(--ink); border-radius: 50%; background: var(--lgreen);
+  box-shadow: 0 3px 0 var(--ink); display: flex; align-items: center; justify-content: center;
+}
+.photobtn:disabled { opacity: 0.55; }
+.snapline { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 500; }
+.snaptile {
+  align-self: flex-start; min-width: 200px; padding: 14px 16px; border: 2px solid var(--ink); border-radius: 20px; background: var(--lgreen);
+  box-shadow: 0 3px 0 var(--ink); display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 15px;
+  touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+}
+.snapview { position: fixed; inset: 0; z-index: 9999; background: #000; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+.snapview img { max-width: 100%; max-height: 100%; object-fit: contain; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+.snapwm { position: absolute; inset: 0; background-repeat: repeat; pointer-events: none; }
+.snapbar {
+  position: absolute; top: calc(16px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); padding: 6px 14px; border-radius: 16px;
+  background: rgba(0, 0, 0, 0.55); color: #fff; font-size: 14px; font-weight: 600; white-space: nowrap;
+}

@@ -1,7 +1,7 @@
 import { html, render, useState, useEffect, useMemo, useRef } from 'https://cdn.jsdelivr.net/npm/htm@3.1.1/preact/standalone.module.js';
-import { SUPABASE_URL, SUPABASE_KEY, MAP_STYLE, MAP_CENTER, MAPLIBRE_JS, MAPLIBRE_CSS } from './config.js?v=7';
-import { T } from './i18n.js?v=7';
-import { Icon, iconSvg, CATS, CAT_ORDER, INTERESTS } from './icons.js?v=7';
+import { SUPABASE_URL, SUPABASE_KEY, MAP_STYLE, MAP_CENTER, MAPLIBRE_JS, MAPLIBRE_CSS } from './config.js?v=8';
+import { T } from './i18n.js?v=8';
+import { Icon, iconSvg, CATS, CAT_ORDER, INTERESTS } from './icons.js?v=8';
 
 if (!window.supabase) throw new Error('The Supabase library did not load (cdn.jsdelivr.net)');
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -1185,6 +1185,7 @@ function FriendsTab({ me, rels, reloadRels }) {
       <div class="h2" style="font-size:22px">${t('yourFriends')}</div>
       ${friends.length === 0 && html`<div class="sticker empty"><${Icon} name="friends" /> <span>${t('noFriends')}</span></div>`}
       ${friends.map((r) => html`<${PersonRow} person=${people[other(r)] || nameless}>
+        <a class="mini" href=${'#dm/' + other(r)}>${t('chatBtn')}</a>
         <button class="mini ghost" disabled=${busy}
           onClick=${() => { if (confirm(t('confirmRemove'))) remove(other(r)); }}>${t('removeBtn')}</button>
       <//>`)}
@@ -1195,6 +1196,239 @@ function FriendsTab({ me, rels, reloadRels }) {
       ${outgoing.map((r) => html`<${PersonRow} person=${people[r.addressee_id] || nameless}>
         <button class="mini ghost" disabled=${busy} onClick=${() => remove(r.addressee_id)}>${t('cancelBtn')}</button>
       <//>`)}
+    </div>`}
+  </div>`;
+}
+
+/* ---------- friend chat + view-once photos ---------- */
+function compressImage(file, maxSide = 1280, quality = 0.72) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('compress'))), 'image/jpeg', quality);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('image')); };
+    img.src = url;
+  });
+}
+
+// the viewer's own username is repeated over the photo, so a leaked screenshot shows who took it
+function wmUrl(text) {
+  const svg = "<svg xmlns='http://www.w3.org/2000/svg' width='230' height='130'><text x='115' y='70' text-anchor='middle' transform='rotate(-24 115 65)' font-family='sans-serif' font-size='20' font-weight='700' fill='white' fill-opacity='0.42' stroke='black' stroke-opacity='0.25' stroke-width='0.6'>" + text + '</text></svg>';
+  return 'url("data:image/svg+xml,' + encodeURIComponent(svg) + '")';
+}
+
+function DMPage({ me, otherId }) {
+  const { t, lang } = useApp();
+  const [thread, setThread] = useState(undefined);
+  const [other, setOther] = useState(null);
+  const [msgs, setMsgs] = useState([]);
+  const [views, setViews] = useState([]);
+  const [text, setText] = useState('');
+  const [sending, setSending] = useState(false);
+  const [err, setErr] = useState('');
+  const [viewer, setViewer] = useState(null);
+  const endRef = useRef(null);
+  const holdRef = useRef(false);
+  const viewerRef = useRef(null);
+  const timerRef = useRef(null);
+  const fileRef = useRef(null);
+
+  useEffect(() => {
+    let alive = true;
+    setThread(undefined);
+    (async () => {
+      const [a, b] = await Promise.all([
+        sb.rpc('get_or_create_thread', { p_other: otherId }),
+        sb.from('profiles').select('id,username,display_name').eq('id', otherId).maybeSingle(),
+      ]);
+      if (!alive) return;
+      if (a.error || !a.data) { setThread(null); return; }
+      setOther(b.data || null);
+      setThread(a.data);
+    })();
+    return () => { alive = false; };
+  }, [otherId]);
+
+  async function load() {
+    if (!thread) return;
+    const [m, v] = await Promise.all([
+      sb.from('dm_messages').select('id,sender_id,kind,body,snap_path,created_at')
+        .eq('thread_id', thread).gt('expires_at', new Date().toISOString()).order('created_at').limit(300),
+      sb.from('snap_views').select('message_id,viewer_id'),
+    ]);
+    if (!m.error) setMsgs(m.data || []);
+    if (!v.error) setViews(v.data || []);
+  }
+
+  useEffect(() => {
+    if (!thread) return;
+    load();
+    const channel = sb.channel('dm-' + thread)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'dm_messages', filter: 'thread_id=eq.' + thread }, () => load())
+      .subscribe();
+    const poll = setInterval(load, 5000);
+    return () => { clearInterval(poll); sb.removeChannel(channel); };
+  }, [thread]);
+
+  useEffect(() => {
+    if (endRef.current) endRef.current.scrollIntoView({ block: 'end' });
+  }, [msgs.length]);
+
+  function endView() {
+    holdRef.current = false;
+    clearTimeout(timerRef.current);
+    const v = viewerRef.current;
+    if (v) {
+      viewerRef.current = null;
+      setViewer(null);
+      URL.revokeObjectURL(v.url);
+      sb.storage.from('snaps').remove([v.path]); // the file is deleted after it was seen
+    }
+  }
+
+  useEffect(() => {
+    const onHide = () => { if (document.hidden) endView(); };
+    document.addEventListener('visibilitychange', onHide);
+    return () => { document.removeEventListener('visibilitychange', onHide); endView(); };
+  }, []);
+
+  async function startView(m) {
+    if (viewerRef.current || holdRef.current) return;
+    holdRef.current = true;
+    setErr('');
+    const { data: path, error } = await sb.rpc('open_snap', { p_message_id: m.id });
+    if (error) {
+      holdRef.current = false;
+      load();
+      if (!/already/i.test(error.message)) setErr(t('snapError'));
+      return;
+    }
+    setViews((prev) => [...prev, { message_id: m.id, viewer_id: me.id }]);
+    const dl = await sb.storage.from('snaps').download(path);
+    if (dl.error || !dl.data) { holdRef.current = false; setErr(t('snapError')); return; }
+    const url = URL.createObjectURL(dl.data);
+    if (!holdRef.current) { // finger was lifted before the photo arrived
+      URL.revokeObjectURL(url);
+      sb.storage.from('snaps').remove([path]);
+      return;
+    }
+    viewerRef.current = { url, path };
+    setViewer({ url, path });
+    timerRef.current = setTimeout(endView, 10000);
+  }
+
+  async function sendText(e) {
+    e.preventDefault();
+    const body = text.trim();
+    if (!body || sending || !thread) return;
+    setSending(true);
+    setErr('');
+    setText('');
+    const { error } = await sb.from('dm_messages').insert({ thread_id: thread, sender_id: me.id, kind: 'text', body });
+    setSending(false);
+    if (error) { setErr(t('friendsError')); setText(body); return; }
+    load();
+  }
+
+  async function sendPhoto(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file || !thread) return;
+    setSending(true);
+    setErr('');
+    try {
+      const blob = await compressImage(file);
+      const path = thread + '/' + crypto.randomUUID() + '.jpg';
+      const up = await sb.storage.from('snaps').upload(path, blob, { contentType: 'image/jpeg', upsert: false });
+      if (up.error) throw up.error;
+      const ins = await sb.from('dm_messages').insert({ thread_id: thread, sender_id: me.id, kind: 'snap', snap_path: path });
+      if (ins.error) throw ins.error;
+      await load();
+    } catch (e2) {
+      setErr(t('snapError'));
+    }
+    setSending(false);
+  }
+
+  if (thread === undefined) return html`<div class="chat"><div class="chathead"><div class="muted">${t('loading')}</div></div></div>`;
+  if (thread === null) {
+    return html`<div class="chat"><div class="chathead">
+      <div class="pagehead"><${BackBtn} to="friends" /></div>
+      <div class="note bad">${t('dmFail')}</div>
+    </div></div>`;
+  }
+
+  const openedByMe = (id) => views.some((v) => v.message_id === id && v.viewer_id === me.id);
+  const seenByOther = (id) => views.some((v) => v.message_id === id && v.viewer_id !== me.id);
+
+  return html`<div class="chat">
+    <div class="wm" aria-hidden="true"></div>
+    <div class="chathead">
+      <div class="pagehead" style="justify-content:flex-start">
+        <${BackBtn} to="friends" />
+        <div>
+          <div class="h2" style="font-size:22px">${other ? other.display_name : '...'}</div>
+          <div class="muted">${other ? '@' + other.username : ''}</div>
+        </div>
+      </div>
+      <div class="chatnote"><${Icon} name="clock" size=${18} /> <span>${t('dmNote')}</span></div>
+    </div>
+
+    <div class="msgs">
+      ${msgs.length === 0 && html`<div class="muted" style="text-align:center;margin-top:12px">${t('dmEmpty')}</div>`}
+      ${msgs.map((m) => {
+        const mine = m.sender_id === me.id;
+        if (m.kind === 'text') {
+          return html`<div class=${'bubble' + (mine ? ' mine' : '')}>
+            <div class="btext">${m.body}</div>
+            <div class="btime">${fmtTime(m.created_at, lang)}</div>
+          </div>`;
+        }
+        if (mine) {
+          return html`<div class="bubble mine">
+            <div class="btext snapline"><${Icon} name="camera" size=${20} /> ${seenByOther(m.id) ? t('snapSeen') : t('snapDelivered')}</div>
+            <div class="btime">${fmtTime(m.created_at, lang)}</div>
+          </div>`;
+        }
+        if (openedByMe(m.id)) {
+          return html`<div class="bubble"><div class="btext snapline"><${Icon} name="camera" size=${20} /> ${t('snapOpened')}</div></div>`;
+        }
+        return html`<div class="snaptile"
+          onPointerDown=${(e) => { e.preventDefault(); startView(m); }}
+          onPointerUp=${endView} onPointerLeave=${endView} onPointerCancel=${endView}
+          onContextMenu=${(e) => e.preventDefault()}>
+          <${Icon} name="camera" size=${24} /> <span>${t('holdToView')}</span>
+        </div>`;
+      })}
+      <div ref=${endRef}></div>
+    </div>
+
+    ${err && html`<div class="note bad" style="margin:0 16px;position:relative;z-index:1">${err}</div>`}
+    <form class="composer" onSubmit=${sendText}>
+      <button type="button" class="photobtn" aria-label=${t('sendPhoto')} disabled=${sending} onClick=${() => fileRef.current && fileRef.current.click()}>
+        <${Icon} name="camera" />
+      </button>
+      <input ref=${fileRef} type="file" accept="image/*" style="display:none" onChange=${sendPhoto} />
+      <input class="input" value=${text} maxlength="1000" placeholder=${t('msgPlaceholder')} onInput=${(e) => setText(e.target.value)} />
+      <button class="sendbtn" type="submit" aria-label=${t('send')} disabled=${sending || !text.trim()}>
+        <${Icon} name="send" />
+      </button>
+    </form>
+
+    ${viewer && html`<div class="snapview">
+      <img src=${viewer.url} alt="" draggable="false" />
+      <div class="snapwm" style=${{ backgroundImage: wmUrl('@' + me.username) }}></div>
+      <div class="snapbar">${t('releaseClose')}</div>
     </div>`}
   </div>`;
 }
@@ -1287,6 +1521,7 @@ function Shell({ me, route }) {
   else if (tab === 'plan' && id) { body = html`<${PlanPage} me=${me} id=${id} rels=${rels} reloadPlans=${loadPlans} />`; navTab = 'plans'; }
   else if (tab === 'new') { body = html`<${NewPlan} me=${me} places=${places} presetPlaceId=${id || null} reloadPlans=${loadPlans} />`; navTab = 'plans'; showNav = false; }
   else if (tab === 'chat' && id) { body = html`<${ChatPage} me=${me} id=${id} />`; navTab = 'plans'; showNav = false; }
+  else if (tab === 'dm' && id) { body = html`<${DMPage} me=${me} otherId=${id} />`; navTab = 'friends'; showNav = false; }
   else if (tab === 'friends') body = html`<${FriendsTab} me=${me} rels=${rels} reloadRels=${loadRels} />`;
   else if (tab === 'profile') body = html`<${Profile} me=${me} />`;
   else { body = html`<${Home} me=${me} places=${places} plans=${plans} loadError=${loadError} />`; navTab = 'home'; }
