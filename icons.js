@@ -1,6 +1,4 @@
-import { h } from 'https://esm.sh/preact@10.24.3';
-import htm from 'https://esm.sh/htm@3.1.1';
-const html = htm.bind(h);
+import { html } from 'https://cdn.jsdelivr.net/npm/htm@3.1.1/preact/standalone.module.js';
 
 const P = {
   coffee: '<path d="M5 9h11v5a5 5 0 0 1-5 5h-1a5 5 0 0 1-5-5z"/><path d="M16 10h1.5a2.5 2.5 0 0 1 0 5H16"/><path d="M8 3v3M12 3v3"/>',

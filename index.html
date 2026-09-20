@@ -30,8 +30,8 @@
 </div>
 
 <script>
-  // If the app has not started after 9 seconds, test which service is unreachable
-  // from this device and show the result on screen.
+  // If the app has not started after 9 seconds, test connectivity and try loading
+  // each app file on its own, so the exact failing file is shown on screen.
   (function () {
     var errors = [];
     window.addEventListener('error', function (e) {
@@ -41,17 +41,36 @@
       errors.push('promise: ' + ((e.reason && e.reason.message) || e.reason));
     });
     var probes = [
-      ['libraries (jsdelivr)', 'https://cdn.jsdelivr.net/npm/htm@3.1.1/package.json'],
-      ['database (supabase)', 'https://bzzpubbheywnmmansoze.supabase.co/auth/v1/health'],
-      ['fonts (google)', 'https://fonts.googleapis.com/css2?family=Rubik'],
-      ['map tiles (openfreemap)', 'https://tiles.openfreemap.org/planet']
+      ['network: jsdelivr', 'https://cdn.jsdelivr.net/npm/htm@3.1.1/package.json'],
+      ['network: supabase', 'https://bzzpubbheywnmmansoze.supabase.co/auth/v1/health']
     ];
-    function probe(p, done) {
+    var modules = [
+      ['file: htm/preact', 'https://cdn.jsdelivr.net/npm/htm@3.1.1/preact/standalone.module.js'],
+      ['file: config.js', './config.js'],
+      ['file: i18n.js', './i18n.js'],
+      ['file: icons.js', './icons.js'],
+      ['file: app.js', './app.js']
+    ];
+    function row(list, label) {
+      var r = document.createElement('div');
+      r.textContent = '… ' + label;
+      list.appendChild(r);
+      return r;
+    }
+    function probe(p, r) {
       var c = new AbortController();
       var t = setTimeout(function () { c.abort(); }, 7000);
       fetch(p[1], { mode: 'no-cors', cache: 'no-store', signal: c.signal })
-        .then(function () { clearTimeout(t); done(true); })
-        .catch(function () { clearTimeout(t); done(false); });
+        .then(function () { clearTimeout(t); r.textContent = '✓ ' + p[0]; })
+        .catch(function () { clearTimeout(t); r.textContent = '✗ ' + p[0]; });
+    }
+    function tryImport(m, r) {
+      var timer = new Promise(function (_, reject) {
+        setTimeout(function () { reject(new Error('no answer after 10s')); }, 10000);
+      });
+      Promise.race([import(m[1]), timer])
+        .then(function () { r.textContent = '✓ ' + m[0]; })
+        .catch(function (e) { r.textContent = '✗ ' + m[0] + ' -> ' + ((e && e.message) || e); });
     }
     setTimeout(function () {
       if (window.__mounted) return;
@@ -59,15 +78,11 @@
       if (!box) return;
       box.style.display = 'block';
       var list = document.getElementById('boot-list');
-      probes.forEach(function (p) {
-        var row = document.createElement('div');
-        row.textContent = '… ' + p[0];
-        list.appendChild(row);
-        probe(p, function (ok) { row.textContent = (ok ? '✓ ' : '✗ ') + p[0]; });
-      });
-      setTimeout(function () {
+      probes.forEach(function (p) { probe(p, row(list, p[0])); });
+      modules.forEach(function (m) { tryImport(m, row(list, m[0])); });
+      setInterval(function () {
         document.getElementById('boot-err').textContent = errors.join('\n');
-      }, 8000);
+      }, 1000);
     }, 9000);
   })();
 </script>

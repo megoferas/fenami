@@ -7,3 +7,7 @@ export const SUPABASE_KEY = 'sb_publishable_6lONwnvVEEspSAbqcdLbxQ_eyPthfWh';
 // Free vector map tiles (OpenStreetMap data). Attribution is shown on the map.
 export const MAP_STYLE = 'https://tiles.openfreemap.org/styles/positron';
 export const MAP_CENTER = [31.47, 30.03]; // New Cairo
+
+// MapLibre is loaded only when the map opens.
+export const MAPLIBRE_JS = 'https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js';
+export const MAPLIBRE_CSS = 'https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css';
