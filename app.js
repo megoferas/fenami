@@ -1,7 +1,7 @@
 import { html, render, useState, useEffect, useMemo, useRef } from 'https://cdn.jsdelivr.net/npm/htm@3.1.1/preact/standalone.module.js';
-import { SUPABASE_URL, SUPABASE_KEY, MAP_STYLE, MAP_CENTER, MAPLIBRE_JS, MAPLIBRE_CSS } from './config.js?v=4';
-import { T } from './i18n.js?v=4';
-import { Icon, iconSvg, CATS, CAT_ORDER, INTERESTS } from './icons.js?v=4';
+import { SUPABASE_URL, SUPABASE_KEY, MAP_STYLE, MAP_CENTER, MAPLIBRE_JS, MAPLIBRE_CSS } from './config.js?v=6';
+import { T } from './i18n.js?v=6';
+import { Icon, iconSvg, CATS, CAT_ORDER, INTERESTS } from './icons.js?v=6';
 
 if (!window.supabase) throw new Error('The Supabase library did not load (cdn.jsdelivr.net)');
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -97,7 +97,7 @@ function joinError(t, msg) {
 }
 
 const PLAN_COLS =
-  'id,title,activity,starts_at,capacity,visibility,status,host_id,place:places(id,name,name_ar,category),members:plan_members(user_id)';
+  'id,title,activity,starts_at,capacity,visibility,status,host_id,place:places(id,name,name_ar,category,lat,lon),members:plan_members(user_id)';
 
 /* ---------- small pieces ---------- */
 function Splash() {
@@ -132,17 +132,26 @@ function PlanCard({ p, meId }) {
   </a>`;
 }
 
-function Nav({ tab }) {
+function Nav({ tab, badge }) {
   const { t } = useApp();
   const items = ['home', 'explore', 'plans', 'friends', 'profile'];
   return html`<nav class="nav">
     ${items.map(
       (id) => html`<a href=${'#' + id} class=${tab === id ? 'on' : ''}>
-        <span class="pill"><${Icon} name=${id} /></span>
+        <span class="pill"><${Icon} name=${id} />${id === 'friends' && badge > 0 && html`<span class="badge">${badge}</span>`}</span>
         <span>${t('nav.' + id)}</span>
       </a>`
     )}
   </nav>`;
+}
+
+async function shareInvite(me, t) {
+  const url = location.origin + location.pathname;
+  const text = t('inviteText') + ' @' + me.username;
+  try {
+    if (navigator.share) { await navigator.share({ title: 'FENAMI', text, url }); return; }
+  } catch (e) { return; }
+  try { await navigator.clipboard.writeText(text + ' ' + url); alert(t('copied')); } catch (e) { /* ignore */ }
 }
 
 function BackBtn({ to }) {
@@ -330,32 +339,120 @@ function Home({ me, places, plans, loadError }) {
 }
 
 /* ---------- explore (map + list) ---------- */
-function Explore({ places, initialId, loadError }) {
+// Calm map: few pins by default, one type at a time, crowded pins merge into numbered bubbles.
+const GROUPS = {
+  featured: { icon: 'star', cats: null },
+  plans: { icon: 'friends', cats: [] },
+  coffee: { icon: 'coffee', cats: ['coffee'] },
+  food: { icon: 'food', cats: ['food'] },
+  activities: { icon: 'entertainment', cats: ['gaming', 'entertainment', 'karting', 'padel', 'football', 'sports', 'culture'] },
+  cinema: { icon: 'cinema', cats: ['cinema'] },
+  outdoors: { icon: 'outdoors', cats: ['outdoors'] },
+};
+const GROUP_ORDER = ['featured', 'plans', 'coffee', 'food', 'activities', 'cinema', 'outdoors'];
+const FEATURED_CATS = ['gaming', 'entertainment', 'karting', 'padel', 'football', 'cinema'];
+
+// Recolor the base map so it matches FENAMI (soft pink, green parks) and hide shop/POI clutter.
+function tintMap(map, lang) {
+  const layers = (map.getStyle() && map.getStyle().layers) || [];
+  layers.forEach((l) => {
+    const id = l.id.toLowerCase();
+    try {
+      if (l.type === 'background') map.setPaintProperty(l.id, 'background-color', '#FBE6EC');
+      else if (l.type === 'fill' && /water/.test(id)) map.setPaintProperty(l.id, 'fill-color', '#CFE7E2');
+      else if (l.type === 'fill' && /(park|wood|forest|grass|green|landcover|nature)/.test(id)) map.setPaintProperty(l.id, 'fill-color', '#D3E8C4');
+      else if (l.type === 'fill' && /building/.test(id)) map.setPaintProperty(l.id, 'fill-color', '#F6D3DD');
+      else if (l.type === 'line' && /(road|street|motorway|highway|trunk|primary|secondary|tertiary|minor|service)/.test(id) && !/(rail|casing|bridge_casing)/.test(id)) {
+        map.setPaintProperty(l.id, 'line-color', '#FFFFFF');
+      } else if (l.type === 'symbol' && /poi/.test(id)) map.setLayoutProperty(l.id, 'visibility', 'none');
+      else if (l.type === 'symbol') {
+        map.setPaintProperty(l.id, 'text-color', '#3F5B39');
+        map.setPaintProperty(l.id, 'text-halo-color', '#FBE6EC');
+        if (l.layout && l.layout['text-field']) {
+          map.setLayoutProperty(l.id, 'text-field', ['coalesce', ['get', lang === 'ar' ? 'name:ar' : 'name:en'], ['get', 'name']]);
+        }
+      }
+    } catch (e) { /* a layer that cannot be recolored is simply left as it is */ }
+  });
+}
+
+function makePin(p, isSel, showLabel, lang) {
+  const c = CATS[p.category] || CATS.sports;
+  const el = document.createElement('button');
+  el.className = 'pin pin-' + c.tone + (isSel ? ' pin-sel' : '');
+  el.setAttribute('aria-label', pname(p, lang));
+  el.innerHTML = iconSvg(c.icon, isSel ? 26 : 22) + (showLabel ? '<span class="pinlabel"></span>' : '');
+  if (showLabel) el.querySelector('.pinlabel').textContent = pname(p, lang);
+  return el;
+}
+
+function clusterPoints(map, items, cell) {
+  const groups = new Map();
+  items.forEach((p) => {
+    const pt = map.project([p.lon, p.lat]);
+    const key = Math.floor(pt.x / cell) + ':' + Math.floor(pt.y / cell);
+    let g = groups.get(key);
+    if (!g) { g = { items: [], lon: 0, lat: 0 }; groups.set(key, g); }
+    g.items.push(p);
+    g.lon += p.lon;
+    g.lat += p.lat;
+  });
+  return [...groups.values()].map((g) => ({ items: g.items, lon: g.lon / g.items.length, lat: g.lat / g.items.length }));
+}
+
+function Explore({ me, places, plans, initialId, loadError }) {
   const { t, lang } = useApp();
   const [view, setView] = useState('map');
-  const [cat, setCat] = useState('all');
+  const [group, setGroup] = useState('featured');
   const [q, setQ] = useState('');
   const [sel, setSel] = useState(initialId || null);
   const [mapReady, setMapReady] = useState(false);
   const [mapErr, setMapErr] = useState(false);
+  const [tick, setTick] = useState(0);
   const mapEl = useRef(null);
   const mapRef = useRef(null);
   const markers = useRef([]);
+  const meMarker = useRef(null);
 
   useEffect(() => {
     if (initialId) { setSel(initialId); setView('map'); }
   }, [initialId]);
 
-  const filtered = useMemo(() => {
+  // plans grouped by the place they happen at
+  const plansByPlace = useMemo(() => {
+    const m = new Map();
+    plans.forEach((p) => {
+      if (p.place && p.place.lat != null) {
+        const arr = m.get(p.place.id) || [];
+        arr.push(p);
+        m.set(p.place.id, arr);
+      }
+    });
+    return m;
+  }, [plans]);
+
+  // what to show: search finds anything, otherwise one type at a time
+  const shown = useMemo(() => {
     const s = q.trim().toLowerCase();
-    return places.filter((p) =>
-      (cat === 'all' || p.category === cat) &&
-      (!s || (p.name + ' ' + (p.name_ar || '')).toLowerCase().includes(s))
-    );
-  }, [places, cat, q]);
+    if (s) return places.filter((p) => (p.name + ' ' + (p.name_ar || '')).toLowerCase().includes(s)).slice(0, 60);
+    if (group === 'plans') return [];
+    if (group === 'featured') {
+      const now = today();
+      return places.filter((p) => FEATURED_CATS.includes(p.category) || (p.is_new_until && p.is_new_until >= now));
+    }
+    return places.filter((p) => GROUPS[group].cats.includes(p.category));
+  }, [places, group, q]);
 
-  const selected = useMemo(() => places.find((p) => p.id === sel) || null, [places, sel]);
+  const selected = useMemo(() => {
+    if (!sel) return null;
+    const found = places.find((p) => p.id === sel);
+    if (found) return found;
+    const pl = plansByPlace.get(sel);
+    return pl && pl[0] ? pl[0].place : null;
+  }, [places, plansByPlace, sel]);
+  const selectedPlans = selected ? plansByPlace.get(selected.id) || [] : [];
 
+  // create the map
   useEffect(() => {
     if (view !== 'map') return;
     let cancelled = false;
@@ -371,7 +468,9 @@ function Explore({ places, initialId, loadError }) {
           });
         } catch (e) { setMapErr(true); return; }
         mapRef.current = map;
+        map.on('style.load', () => tintMap(map, APP.lang));
         map.on('click', () => setSel(null));
+        map.on('moveend', () => setTick((n) => n + 1));
         setMapReady(true);
       })
       .catch(() => setMapErr(true));
@@ -379,41 +478,102 @@ function Explore({ places, initialId, loadError }) {
       cancelled = true;
       markers.current.forEach((m) => m.remove());
       markers.current = [];
+      if (meMarker.current) { meMarker.current.remove(); meMarker.current = null; }
       if (map) map.remove();
       mapRef.current = null;
       setMapReady(false);
     };
   }, [view]);
 
+  // re-apply labels language when the language changes
+  useEffect(() => {
+    const map = mapRef.current;
+    if (map && map.isStyleLoaded()) tintMap(map, lang);
+  }, [lang, mapReady]);
+
+  // draw pins, numbered bubbles and plan bubbles for what is inside the current view
   useEffect(() => {
     const map = mapRef.current;
     if (!map || view !== 'map') return;
     markers.current.forEach((m) => m.remove());
     markers.current = [];
-    filtered.forEach((p) => {
-      const c = CATS[p.category] || CATS.sports;
-      const el = document.createElement('button');
-      el.className = 'pin pin-' + c.tone + (p.id === sel ? ' pin-sel' : '');
-      el.setAttribute('aria-label', pname(p, lang));
-      el.innerHTML = iconSvg(c.icon, p.id === sel ? 26 : 22);
-      el.addEventListener('click', (ev) => { ev.stopPropagation(); setSel(p.id); });
-      markers.current.push(new maplibregl.Marker({ element: el }).setLngLat([p.lon, p.lat]).addTo(map));
-    });
-  }, [filtered, sel, view, mapReady, lang]);
+    const add = (el, lon, lat) => markers.current.push(new maplibregl.Marker({ element: el }).setLngLat([lon, lat]).addTo(map));
+    const bounds = map.getBounds();
+    const zoom = map.getZoom();
 
+    // plans first: they are the "people" on the map
+    plansByPlace.forEach((list, placeId) => {
+      const pl = list[0].place;
+      if (!bounds.contains([pl.lon, pl.lat])) return;
+      const total = list.reduce((sum, x) => sum + (x.members ? x.members.length : 0), 0);
+      const el = document.createElement('button');
+      el.className = 'planpin' + (placeId === sel ? ' planpin-sel' : '');
+      el.setAttribute('aria-label', t('plansHere'));
+      el.innerHTML = iconSvg('friends', 22) + '<span>' + total + '</span>';
+      el.addEventListener('click', (ev) => { ev.stopPropagation(); setSel(placeId); });
+      add(el, pl.lon, pl.lat);
+    });
+
+    const visible = shown.filter((p) => bounds.contains([p.lon, p.lat]) && p.id !== sel && !plansByPlace.has(p.id));
+    clusterPoints(map, visible, 56).forEach((g) => {
+      if (g.items.length === 1) {
+        const p = g.items[0];
+        const el = makePin(p, false, zoom >= 14.5, lang);
+        el.addEventListener('click', (ev) => { ev.stopPropagation(); setSel(p.id); });
+        add(el, p.lon, p.lat);
+      } else {
+        const el = document.createElement('button');
+        el.className = 'cluster';
+        el.textContent = String(g.items.length);
+        el.setAttribute('aria-label', String(g.items.length));
+        el.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          const b = new maplibregl.LngLatBounds();
+          g.items.forEach((p) => b.extend([p.lon, p.lat]));
+          map.fitBounds(b, { padding: 90, maxZoom: 16, duration: 500 });
+        });
+        add(el, g.lon, g.lat);
+      }
+    });
+
+    if (selected && !plansByPlace.has(selected.id)) {
+      const el = makePin(selected, true, true, lang);
+      el.addEventListener('click', (ev) => ev.stopPropagation());
+      add(el, selected.lon, selected.lat);
+    }
+  }, [shown, sel, selected, plansByPlace, view, mapReady, tick, lang]);
+
+  // fly to the selected place
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !selected) return;
     map.flyTo({ center: [selected.lon, selected.lat], zoom: Math.max(map.getZoom(), 14.5), duration: 600 });
   }, [sel, mapReady]);
 
-  const cats = ['all', ...CAT_ORDER.filter((c) => places.some((p) => p.category === c))];
+  // "near me": the dot is drawn on this phone only and is never sent anywhere
+  function locate() {
+    if (!navigator.geolocation || !mapRef.current) return;
+    navigator.geolocation.getCurrentPosition((pos) => {
+      const map = mapRef.current;
+      if (!map) return;
+      const ll = [pos.coords.longitude, pos.coords.latitude];
+      if (meMarker.current) meMarker.current.remove();
+      const el = document.createElement('div');
+      el.className = 'mydot';
+      meMarker.current = new maplibregl.Marker({ element: el }).setLngLat(ll).addTo(map);
+      map.flyTo({ center: ll, zoom: 14.5, duration: 700 });
+    }, () => {}, { enableHighAccuracy: true, timeout: 8000 });
+  }
+
+  const nothing = mapReady && view === 'map' && shown.length === 0 && plans.length === 0;
 
   return html`<div class="explore">
     ${view === 'map' && html`<div class="map" ref=${mapEl}></div>`}
     ${view === 'list' && html`<div class="list">
-      ${filtered.length === 0 && html`<div class="note">${t('noResults')}</div>`}
-      ${filtered.slice(0, 200).map((p) => html`<${PlaceCard} p=${p} />`)}
+      ${group === 'plans' && plans.length === 0 && html`<div class="note">${t('noPlans')}</div>`}
+      ${(group === 'plans' || (!q.trim() && group === 'featured')) && plans.map((p) => html`<${PlanCard} p=${p} meId=${me.id} />`)}
+      ${group !== 'plans' && shown.length === 0 && html`<div class="note">${t('noResults')}</div>`}
+      ${group !== 'plans' && shown.slice(0, 200).map((p) => html`<${PlaceCard} p=${p} />`)}
     </div>`}
 
     <div class="topbar">
@@ -429,13 +589,19 @@ function Explore({ places, initialId, loadError }) {
         </button>
       </div>
       <div class="catrow">
-        ${cats.map((c) => html`<button class=${'chip' + (cat === c ? ' on' : '')} onClick=${() => setCat(c)}>
-          ${c !== 'all' && html`<${Icon} name=${CATS[c].icon} size=${18} />`}
-          ${c === 'all' ? t('all') : t('cat.' + c)}
+        ${GROUP_ORDER.map((g) => html`<button class=${'chip' + (group === g ? ' on' : '')}
+          onClick=${() => { setGroup(g); setSel(null); setQ(''); }}>
+          <${Icon} name=${GROUPS[g].icon} size=${18} />
+          ${t('grp.' + g)}${g === 'plans' && plans.length > 0 ? ' ' + plans.length : ''}
         </button>`)}
       </div>
       ${(mapErr || loadError) && html`<div class="note bad">${mapErr ? t('mapError') : t('loadError')}</div>`}
+      ${nothing && html`<div class="note">${t('nothingHere')}</div>`}
     </div>
+
+    ${view === 'map' && !selected && html`<button class="locbtn" aria-label=${t('locate')} onClick=${locate}>
+      <${Icon} name="locate" />
+    </button>`}
 
     ${selected && view === 'map' && html`<div class="sticker sheet">
       <div class="sheethead">
@@ -450,6 +616,10 @@ function Explore({ places, initialId, loadError }) {
           <${Icon} name="close" />
         </button>
       </div>
+      ${selectedPlans.length > 0 && html`<div class="stack">
+        <div class="psub" style="font-weight:600">${t('plansHere')}</div>
+        ${selectedPlans.map((p) => html`<${PlanCard} p=${p} meId=${me.id} />`)}
+      </div>`}
       ${selected.opening_hours && html`<div class="meta"><${Icon} name="clock" size=${18} /> ${selected.opening_hours}</div>`}
       <div class="row2">
         <a class="btn btn-dark btn-small" target="_blank" rel="noopener"
@@ -606,6 +776,7 @@ function NewPlan({ me, places, presetPlaceId, reloadPlans }) {
   const [pq, setPq] = useState('');
   const [when, setWhen] = useState(defaultWhen());
   const [cap, setCap] = useState(5);
+  const [vis, setVis] = useState('public');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
@@ -636,7 +807,7 @@ function NewPlan({ me, places, presetPlaceId, reloadPlans }) {
     const id = crypto.randomUUID();
     const { error } = await sb.from('plans').insert({
       id, host_id: me.id, kind: 'plan', title: ttl, activity, place_id: placeId,
-      starts_at: startsAt.toISOString(), capacity: cap, visibility: 'public',
+      starts_at: startsAt.toISOString(), capacity: cap, visibility: vis,
     });
     if (error) { setBusy(false); return setErr(error.message); }
     await reloadPlans();
@@ -694,11 +865,11 @@ function NewPlan({ me, places, presetPlaceId, reloadPlans }) {
     <div class="block">
       <div class="label">${t('whoJoin')}</div>
       <div class="chips">
-        <button type="button" class="chip on">${t('vis.public')}</button>
-        <button type="button" class="chip" disabled>${t('vis.friends')}</button>
+        <button type="button" class=${'chip' + (vis === 'public' ? ' on' : '')} onClick=${() => setVis('public')}>${t('vis.public')}</button>
+        <button type="button" class=${'chip' + (vis === 'friends' ? ' on' : '')} onClick=${() => setVis('friends')}>${t('vis.friends')}</button>
         <button type="button" class="chip" disabled>${t('vis.invite')}</button>
       </div>
-      <div class="hint">${t('publicHint')}</div>
+      <div class="hint">${vis === 'friends' ? t('friendsHint') : t('publicHint')}</div>
     </div>
 
     ${err && html`<div class="note bad">${err}</div>`}
@@ -808,6 +979,143 @@ function ChatPage({ me, id }) {
   </div>`;
 }
 
+/* ---------- friends ---------- */
+function PersonRow({ person, children }) {
+  return html`<div class="sticker person">
+    <div class="avatar tone-pink">${initial(person.display_name)}</div>
+    <div class="pinfo">
+      <span class="pname">${person.display_name}</span>
+      <span class="psub">@${person.username}</span>
+    </div>
+    <div class="person-actions">${children}</div>
+  </div>`;
+}
+
+function FriendsTab({ me, rels, reloadRels }) {
+  const { t } = useApp();
+  const [people, setPeople] = useState({});
+  const [q, setQ] = useState('');
+  const [results, setResults] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const other = (r) => (r.requester_id === me.id ? r.addressee_id : r.requester_id);
+  const friends = rels.filter((r) => r.status === 'accepted');
+  const incoming = rels.filter((r) => r.status === 'pending' && r.addressee_id === me.id);
+  const outgoing = rels.filter((r) => r.status === 'pending' && r.requester_id === me.id);
+
+  // load names for everyone I have a relation with
+  useEffect(() => {
+    const ids = [...new Set(rels.map(other))];
+    const missing = ids.filter((id) => !people[id]);
+    if (missing.length === 0) return;
+    sb.from('profiles').select('id,username,display_name').in('id', missing).then(({ data }) => {
+      if (!data) return;
+      setPeople((prev) => {
+        const next = { ...prev };
+        data.forEach((p) => { next[p.id] = p; });
+        return next;
+      });
+    });
+  }, [rels]);
+
+  async function run(fn) {
+    setBusy(true);
+    setErr('');
+    const res = await fn();
+    setBusy(false);
+    if (res && res.error) { setErr(t('friendsError')); return; }
+    await reloadRels();
+  }
+
+  const between = (a, b) => `and(requester_id.eq.${a},addressee_id.eq.${b}),and(requester_id.eq.${b},addressee_id.eq.${a})`;
+  const remove = (id) => run(() => sb.from('friendships').delete().or(between(me.id, id)));
+  const accept = (id) => run(() => sb.from('friendships').update({ status: 'accepted' }).eq('requester_id', id).eq('addressee_id', me.id));
+  const send = (id) => {
+    if (incoming.some((r) => r.requester_id === id)) return accept(id); // they already asked me
+    return run(() => sb.from('friendships').insert({ requester_id: me.id, addressee_id: id, status: 'pending' }));
+  };
+
+  async function search(e) {
+    e.preventDefault();
+    const s = q.trim().toLowerCase().replace(/^@/, '');
+    if (s.length < 2) return;
+    setBusy(true);
+    setErr('');
+    const { data, error } = await sb.from('profiles').select('id,username,display_name')
+      .ilike('username', s + '%').neq('id', me.id).limit(8);
+    setBusy(false);
+    if (error) { setErr(t('friendsError')); return; }
+    setResults(data || []);
+    if (data && data.length) {
+      setPeople((prev) => { const next = { ...prev }; data.forEach((p) => { next[p.id] = p; }); return next; });
+    }
+  }
+
+  const stateOf = (id) => {
+    if (friends.some((r) => other(r) === id)) return 'friend';
+    if (outgoing.some((r) => r.addressee_id === id)) return 'sent';
+    if (incoming.some((r) => r.requester_id === id)) return 'incoming';
+    return 'none';
+  };
+
+  const nameless = { display_name: '...', username: '...' };
+
+  return html`<div class="screen">
+    <div class="pagehead">
+      <div class="h2">${t('nav.friends')}</div>
+      <button class="chip" onClick=${() => shareInvite(me, t)}>${t('inviteBtn')}</button>
+    </div>
+
+    <form class="block" onSubmit=${search}>
+      <div class="label">${t('addFriend')}</div>
+      <div class="searchrow">
+        <label class="searchbox">
+          <${Icon} name="search" size=${22} />
+          <input type="text" placeholder=${t('searchUser')} aria-label=${t('searchUser')} value=${q}
+            autocapitalize="none" autocomplete="off" onInput=${(e) => { setQ(e.target.value); setResults(null); }} />
+        </label>
+      </div>
+      ${results && results.length === 0 && html`<div class="note">${t('noUser')}</div>`}
+      ${results && results.map((p) => {
+        const st = stateOf(p.id);
+        return html`<${PersonRow} person=${p}>
+          ${st === 'friend' && html`<span class="tag green">${t('isFriend')}</span>`}
+          ${st === 'sent' && html`<span class="tag">${t('requested')}</span>`}
+          ${st === 'incoming' && html`<button type="button" class="mini" disabled=${busy} onClick=${() => accept(p.id)}>${t('acceptBtn')}</button>`}
+          ${st === 'none' && html`<button type="button" class="mini" disabled=${busy} onClick=${() => send(p.id)}>${t('addBtn')}</button>`}
+        <//>`;
+      })}
+    </form>
+
+    ${err && html`<div class="note bad">${err}</div>`}
+
+    ${incoming.length > 0 && html`<div class="block">
+      <div class="h2" style="font-size:22px">${t('requestsTitle')}</div>
+      ${incoming.map((r) => html`<${PersonRow} person=${people[r.requester_id] || nameless}>
+        <button class="mini" disabled=${busy} onClick=${() => accept(r.requester_id)}>${t('acceptBtn')}</button>
+        <button class="mini ghost" disabled=${busy} onClick=${() => remove(r.requester_id)}>${t('declineBtn')}</button>
+      <//>`)}
+    </div>`}
+
+    <div class="block">
+      <div class="h2" style="font-size:22px">${t('yourFriends')}</div>
+      ${friends.length === 0 && html`<div class="sticker empty"><${Icon} name="friends" /> <span>${t('noFriends')}</span></div>`}
+      ${friends.map((r) => html`<${PersonRow} person=${people[other(r)] || nameless}>
+        <button class="mini ghost" disabled=${busy}
+          onClick=${() => { if (confirm(t('confirmRemove'))) remove(other(r)); }}>${t('removeBtn')}</button>
+      <//>`)}
+    </div>
+
+    ${outgoing.length > 0 && html`<div class="block">
+      <div class="h2" style="font-size:22px">${t('sentTitle')}</div>
+      ${outgoing.map((r) => html`<${PersonRow} person=${people[r.addressee_id] || nameless}>
+        <button class="mini ghost" disabled=${busy} onClick=${() => remove(r.addressee_id)}>${t('cancelBtn')}</button>
+      <//>`)}
+    </div>`}
+  </div>`;
+}
+
 /* ---------- other tabs ---------- */
 function ComingSoon({ tab }) {
   const { t } = useApp();
@@ -831,6 +1139,9 @@ function Profile({ me }) {
         <button class=${'chip' + (lang === 'ar' ? ' on' : '')} onClick=${() => setLang('ar')}>العربية</button>
       </div>
     </div>
+    <button class="btn" onClick=${() => shareInvite(me, t)}>
+      <${Icon} name="friends" /> ${t('inviteBtn')}
+    </button>
     <button class="btn btn-dark" onClick=${() => sb.auth.signOut()}>
       <${Icon} name="logout" /> ${t('signOut')}
     </button>
@@ -843,6 +1154,7 @@ function Shell({ me, route }) {
   const [loadError, setLoadError] = useState(false);
   const [plans, setPlans] = useState([]);
   const [plansErr, setPlansErr] = useState(false);
+  const [rels, setRels] = useState([]);
   const [tab, id] = route.split('/');
 
   useEffect(() => {
@@ -870,19 +1182,30 @@ function Shell({ me, route }) {
     return () => clearInterval(timer);
   }, []);
 
+  async function loadRels() {
+    const { data } = await sb.from('friendships').select('requester_id,addressee_id,status,created_at');
+    if (data) setRels(data);
+  }
+  useEffect(() => {
+    loadRels();
+    const timer = setInterval(loadRels, 30000);
+    return () => clearInterval(timer);
+  }, []);
+  const incomingCount = rels.filter((r) => r.status === 'pending' && r.addressee_id === me.id).length;
+
   let body;
   let navTab = tab;
   let showNav = true;
-  if (tab === 'explore') body = html`<${Explore} places=${places} initialId=${id || null} loadError=${loadError} />`;
+  if (tab === 'explore') body = html`<${Explore} me=${me} places=${places} plans=${plans} initialId=${id || null} loadError=${loadError} />`;
   else if (tab === 'plans') body = html`<${PlansTab} me=${me} plans=${plans} err=${plansErr} />`;
   else if (tab === 'plan' && id) { body = html`<${PlanPage} me=${me} id=${id} reloadPlans=${loadPlans} />`; navTab = 'plans'; }
   else if (tab === 'new') { body = html`<${NewPlan} me=${me} places=${places} presetPlaceId=${id || null} reloadPlans=${loadPlans} />`; navTab = 'plans'; showNav = false; }
   else if (tab === 'chat' && id) { body = html`<${ChatPage} me=${me} id=${id} />`; navTab = 'plans'; showNav = false; }
-  else if (tab === 'friends') body = html`<${ComingSoon} tab=${tab} />`;
+  else if (tab === 'friends') body = html`<${FriendsTab} me=${me} rels=${rels} reloadRels=${loadRels} />`;
   else if (tab === 'profile') body = html`<${Profile} me=${me} />`;
   else { body = html`<${Home} me=${me} places=${places} plans=${plans} loadError=${loadError} />`; navTab = 'home'; }
 
-  return html`<div style="height:100%">${body}${showNav && html`<${Nav} tab=${navTab} />`}</div>`;
+  return html`<div style="height:100%">${body}${showNav && html`<${Nav} tab=${navTab} badge=${incomingCount} />`}</div>`;
 }
 
 /* ---------- app root ---------- */

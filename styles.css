@@ -216,3 +216,44 @@ button.pcard { width: 100%; text-align: start; font: inherit; color: inherit; }
   box-shadow: 0 3px 0 var(--ink); display: flex; align-items: center; justify-content: center;
 }
 .sendbtn:disabled { opacity: 0.55; }
+
+/* ---- calm map ---- */
+.pinlabel {
+  position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%); max-width: 140px; padding: 2px 8px;
+  border: 1.5px solid var(--ink); border-radius: 10px; background: rgba(255, 248, 250, 0.94); font-size: 12px;
+  font-weight: 600; line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none;
+}
+.cluster {
+  width: 48px; height: 48px; padding: 0; border: 2px solid var(--ink); border-radius: 50%; background: var(--lgreen);
+  box-shadow: 0 3px 0 var(--ink); display: flex; align-items: center; justify-content: center;
+  font-family: var(--display); font-weight: 800; font-size: 19px; color: var(--ink);
+}
+.planpin {
+  min-width: 56px; height: 52px; padding: 0 14px; border: 2px solid var(--ink); border-radius: 26px; background: var(--pink);
+  box-shadow: 0 3px 0 var(--ink); display: flex; align-items: center; justify-content: center; gap: 6px;
+  font-family: var(--display); font-weight: 800; font-size: 20px; color: var(--ink); z-index: 6;
+}
+.planpin-sel { background: var(--card); }
+.mydot { width: 20px; height: 20px; border-radius: 50%; background: #2b6fff; border: 3px solid #fff; box-shadow: 0 0 0 7px rgba(43, 111, 255, 0.25); }
+.locbtn {
+  position: absolute; inset-inline-end: 16px; bottom: 20px; z-index: 3; width: 52px; height: 52px; padding: 0;
+  border: 2px solid var(--ink); border-radius: 50%; background: var(--card); box-shadow: 0 3px 0 var(--ink);
+  display: flex; align-items: center; justify-content: center;
+}
+.sheet { max-height: 62%; overflow-y: auto; }
+
+/* ---- friends ---- */
+.person { display: flex; align-items: center; gap: 12px; padding: 10px 12px; box-shadow: 0 3px 0 var(--ink); }
+.person .avatar { flex: none; width: 46px; height: 46px; font-size: 20px; }
+.person-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+.mini {
+  height: 40px; padding: 0 14px; border: 2px solid var(--ink); border-radius: 20px; background: var(--pink);
+  box-shadow: 0 2px 0 var(--ink); font-size: 14px; font-weight: 600;
+}
+.mini.ghost { background: var(--card); }
+.mini:disabled { opacity: 0.55; }
+.nav .pill { position: relative; }
+.badge {
+  position: absolute; top: -6px; inset-inline-end: 4px; min-width: 20px; height: 20px; padding: 0 5px; border: 2px solid var(--ink);
+  border-radius: 10px; background: var(--pink); font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center;
+}
