@@ -257,3 +257,17 @@ button.pcard { width: 100%; text-align: start; font: inherit; color: inherit; }
   position: absolute; top: -6px; inset-inline-end: 4px; min-width: 20px; height: 20px; padding: 0 5px; border: 2px solid var(--ink);
   border-radius: 10px; background: var(--pink); font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center;
 }
+
+/* ---- layout fixes: nothing may be wider than the phone ---- */
+.label { min-width: 0; }
+.page, .screen { overflow-x: hidden; }
+.page { padding-bottom: 120px; }
+.screen { padding-bottom: 40px; }
+input[type='datetime-local'].input, input[type='date'].input {
+  display: block; -webkit-appearance: none; appearance: none; width: 100%; min-width: 0; max-width: 100%;
+  min-height: 52px; text-align: start; line-height: 52px; padding-top: 0; padding-bottom: 0;
+}
+input[type='datetime-local']::-webkit-date-and-time-value, input[type='date']::-webkit-date-and-time-value { text-align: start; min-height: 1.4em; }
+.textarea { height: auto; min-height: 96px; padding: 12px 18px; border-radius: 22px; resize: none; line-height: 1.4; font-family: inherit; }
+.person-row { display: flex; align-items: center; gap: 12px; }
+.avatar.small { width: 42px; height: 42px; font-size: 18px; flex: none; }

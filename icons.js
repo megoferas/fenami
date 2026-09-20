@@ -5,7 +5,7 @@ const P = {
   gaming: '<rect x="2.5" y="7" width="19" height="11" rx="5.5"/><path d="M7 10.5v4M5 12.5h4"/><circle cx="15.5" cy="11.5" r=".9"/><circle cx="18" cy="14" r=".9"/>',
   karting: '<path d="M3.5 14.5 5.5 9h13l2 5.5V18h-17z"/><circle cx="8" cy="18" r="1.7"/><circle cx="16" cy="18" r="1.7"/>',
   entertainment: '<circle cx="12" cy="13" r="8"/><circle cx="9.8" cy="10.5" r=".9"/><circle cx="13.6" cy="10.2" r=".9"/><circle cx="11.8" cy="13.4" r=".9"/>',
-  padel: '<circle cx="10" cy="9.5" r="5.5"/><path d="m14 13.5 6 6"/><circle cx="8.5" cy="8" r=".8"/><circle cx="11.5" cy="10.5" r=".8"/>',
+  padel: '<circle cx="12" cy="8.5" r="5.5"/><path d="M12 14v7"/><circle cx="10.3" cy="7" r=".8"/><circle cx="13.7" cy="7" r=".8"/><circle cx="12" cy="10.4" r=".8"/>',
   food: '<path d="M7 3v7a2 2 0 0 0 4 0V3M9 3v18M17 21V3c-2.5 1.5-3.5 4-3.5 7H17"/>',
   cinema: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M8 5v14M16 5v14M3 10h5M16 10h5M3 14h5M16 14h5"/>',
   outdoors: '<circle cx="12" cy="9" r="6"/><path d="M12 15v6M9 21h6"/>',

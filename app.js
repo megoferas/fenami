@@ -1,7 +1,7 @@
 import { html, render, useState, useEffect, useMemo, useRef } from 'https://cdn.jsdelivr.net/npm/htm@3.1.1/preact/standalone.module.js';
-import { SUPABASE_URL, SUPABASE_KEY, MAP_STYLE, MAP_CENTER, MAPLIBRE_JS, MAPLIBRE_CSS } from './config.js?v=6';
-import { T } from './i18n.js?v=6';
-import { Icon, iconSvg, CATS, CAT_ORDER, INTERESTS } from './icons.js?v=6';
+import { SUPABASE_URL, SUPABASE_KEY, MAP_STYLE, MAP_CENTER, MAPLIBRE_JS, MAPLIBRE_CSS } from './config.js?v=7';
+import { T } from './i18n.js?v=7';
+import { Icon, iconSvg, CATS, CAT_ORDER, INTERESTS } from './icons.js?v=7';
 
 if (!window.supabase) throw new Error('The Supabase library did not load (cdn.jsdelivr.net)');
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -116,12 +116,16 @@ function PlaceCard({ p }) {
   </a>`;
 }
 
-function PlanCard({ p, meId }) {
+function PlanCard({ p, meId, invited }) {
   const { t, lang } = useApp();
   const members = p.members || [];
   const n = members.length;
   const joined = members.some((m) => m.user_id === meId);
-  const label = joined ? t('joined') : n >= p.capacity ? t('full') : n + '/' + p.capacity;
+  const label = joined
+    ? t('joined')
+    : n >= p.capacity
+      ? t('full')
+      : (invited ? t('invitedTag') : t('joinShort')) + ' ' + n + '/' + p.capacity;
   return html`<a class="sticker pcard" href=${'#plan/' + p.id}>
     <span class=${'dot tone-' + actTone(p.activity)}><${Icon} name=${actIcon(p.activity)} /></span>
     <span class="pinfo">
@@ -636,10 +640,11 @@ function Explore({ me, places, plans, initialId, loadError }) {
 }
 
 /* ---------- plans ---------- */
-function PlansTab({ me, plans, err }) {
+function PlansTab({ me, plans, err, invitedIds }) {
   const { t } = useApp();
   const mine = plans.filter((p) => (p.members || []).some((m) => m.user_id === me.id));
-  const others = plans.filter((p) => !mine.includes(p));
+  const invitedToo = plans.filter((p) => !mine.includes(p) && invitedIds.includes(p.id));
+  const others = plans.filter((p) => !mine.includes(p) && !invitedToo.includes(p));
   return html`<div class="screen">
     <div class="pagehead">
       <div class="h2">${t('nav.plans')}</div>
@@ -647,6 +652,10 @@ function PlansTab({ me, plans, err }) {
     <a class="btn" href="#new"><${Icon} name="plus" size=${22} /> ${t('createPlan')}</a>
     ${err && html`<div class="note bad">${t('plansError')}</div>`}
     ${plans.length === 0 && !err && html`<div class="sticker empty"><${Icon} name="plans" /> <span>${t('noPlans')}</span></div>`}
+    ${invitedToo.length > 0 && html`<div class="block">
+      <div class="h2" style="font-size:22px">${t('invitations')}</div>
+      <div class="stack">${invitedToo.map((p) => html`<${PlanCard} p=${p} meId=${me.id} invited=${true} />`)}</div>
+    </div>`}
     ${mine.length > 0 && html`<div class="block">
       <div class="h2" style="font-size:22px">${t('yourPlans')}</div>
       <div class="stack">${mine.map((p) => html`<${PlanCard} p=${p} meId=${me.id} />`)}</div>
@@ -658,12 +667,15 @@ function PlansTab({ me, plans, err }) {
   </div>`;
 }
 
-function PlanPage({ me, id, reloadPlans }) {
+function PlanPage({ me, id, rels, reloadPlans }) {
   const { t, lang } = useApp();
   const [plan, setPlan] = useState(undefined);
   const [members, setMembers] = useState([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const [showInvite, setShowInvite] = useState(false);
+  const [friendsList, setFriendsList] = useState([]);
+  const [invitedIds, setInvitedIds] = useState([]);
 
   async function load() {
     const [a, b] = await Promise.all([
@@ -690,6 +702,32 @@ function PlanPage({ me, id, reloadPlans }) {
   }
 
   const join = () => act(() => sb.rpc('join_plan', { p_plan_id: id }));
+
+  async function sharePlan() {
+    const url = location.origin + location.pathname + '#plan/' + id;
+    const text = t('shareText') + ' ' + plan.title;
+    try {
+      if (navigator.share) { await navigator.share({ title: plan.title, text, url }); return; }
+    } catch (e) { return; }
+    try { await navigator.clipboard.writeText(text + ' ' + url); alert(t('copied')); } catch (e) { /* ignore */ }
+  }
+
+  async function openInvite() {
+    setShowInvite(true);
+    const ids = rels.filter((r) => r.status === 'accepted').map((r) => (r.requester_id === me.id ? r.addressee_id : r.requester_id));
+    const [prof, inv] = await Promise.all([
+      ids.length ? sb.from('profiles').select('id,username,display_name').in('id', ids) : Promise.resolve({ data: [] }),
+      sb.from('plan_invites').select('user_id').eq('plan_id', id),
+    ]);
+    setFriendsList(prof.data || []);
+    setInvitedIds((inv.data || []).map((x) => x.user_id));
+  }
+
+  async function inviteFriend(uid) {
+    const { error } = await sb.from('plan_invites').insert({ plan_id: id, user_id: uid });
+    if (error) { setErr(t('friendsError')); return; }
+    setInvitedIds((prev) => [...prev, uid]);
+  }
   const leave = () => {
     if (!confirm(t('confirmLeave'))) return;
     act(() => sb.from('plan_members').delete().eq('plan_id', id).eq('user_id', me.id));
@@ -731,6 +769,7 @@ function PlanPage({ me, id, reloadPlans }) {
         <span class="tag"><${Icon} name="lock" size=${16} /> ${t('vis.' + plan.visibility)}</span>
         <span class="tag green">${n}/${plan.capacity} ${t('going')}</span>
       </div>
+      ${plan.description && html`<div style="font-size:16px;line-height:1.4">${plan.description}</div>`}
       ${plan.host && html`<div class="muted" style="color:var(--ink)">${t('hostedBy')} ${plan.host.display_name}</div>`}
     </div>
 
@@ -762,10 +801,41 @@ function PlanPage({ me, id, reloadPlans }) {
                <button class="btn" disabled=${busy || isFull} onClick=${join}>
                  ${isFull ? t('full') : busy ? t('loading') : t('join')}
                </button>`}
+      ${joined && html`<div class="row2">
+        <button class="btn btn-small" onClick=${sharePlan}><${Icon} name="external" size=${18} /> ${t('shareBtn')}</button>
+        ${isHost && html`<button class="btn btn-small" onClick=${openInvite}><${Icon} name="friends" size=${18} /> ${t('inviteBtn')}</button>`}
+      </div>`}
+      ${showInvite && html`<div class="sticker card">
+        <div class="h2" style="font-size:20px">${t('inviteBtn')}</div>
+        ${friendsList.length === 0 && html`<div class="note">${t('noFriends')} <a href="#friends" style="text-decoration:underline">${t('goFriends')}</a></div>`}
+        ${friendsList.map((f) => html`<div class="person-row">
+          <div class="avatar tone-pink small">${initial(f.display_name)}</div>
+          <div class="pinfo"><span class="pname">${f.display_name}</span><span class="psub">@${f.username}</span></div>
+          ${invitedIds.includes(f.id)
+            ? html`<span class="tag green">${t('invitedDone')}</span>`
+            : html`<button class="mini" onClick=${() => inviteFriend(f.id)}>${t('inviteBtn').split(' ')[0]}</button>`}
+        </div>`)}
+      </div>`}
       ${joined && !isHost && html`<button class="btn btn-dark btn-small" disabled=${busy} onClick=${leave}>${t('leave')}</button>`}
       ${isHost && html`<button class="btn btn-dark btn-small" disabled=${busy} onClick=${cancel}>${t('cancelPlan')}</button>`}
     </div>`}
   </div>`;
+}
+
+function quickTimes() {
+  const now = new Date();
+  const at = (d, h) => { const x = new Date(d); x.setHours(h, 0, 0, 0); return x; };
+  const list = [];
+  const tonight = at(now, 20);
+  if (tonight.getTime() > now.getTime() + 30 * 60000) list.push(['tonight', tonight]);
+  const tmr = new Date(now);
+  tmr.setDate(tmr.getDate() + 1);
+  list.push(['tomorrow', at(tmr, 20)]);
+  const fri = new Date(now);
+  const add = ((5 - fri.getDay() + 7) % 7) || 7;
+  fri.setDate(fri.getDate() + add);
+  if (startOfDay(fri) !== startOfDay(tmr)) list.push(['friday', at(fri, 20)]);
+  return list;
 }
 
 function NewPlan({ me, places, presetPlaceId, reloadPlans }) {
@@ -777,6 +847,7 @@ function NewPlan({ me, places, presetPlaceId, reloadPlans }) {
   const [when, setWhen] = useState(defaultWhen());
   const [cap, setCap] = useState(5);
   const [vis, setVis] = useState('public');
+  const [desc, setDesc] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
@@ -807,7 +878,7 @@ function NewPlan({ me, places, presetPlaceId, reloadPlans }) {
     const id = crypto.randomUUID();
     const { error } = await sb.from('plans').insert({
       id, host_id: me.id, kind: 'plan', title: ttl, activity, place_id: placeId,
-      starts_at: startsAt.toISOString(), capacity: cap, visibility: vis,
+      starts_at: startsAt.toISOString(), capacity: cap, visibility: vis, description: desc.trim() || null,
     });
     if (error) { setBusy(false); return setErr(error.message); }
     await reloadPlans();
@@ -816,7 +887,7 @@ function NewPlan({ me, places, presetPlaceId, reloadPlans }) {
   }
 
   return html`<form class="page" onSubmit=${submit}>
-    <div class="pagehead">
+    <div class="pagehead" style="justify-content:flex-start">
       <${BackBtn} to="plans" />
       <div class="h2">${t('createPlan')}</div>
     </div>
@@ -848,9 +919,21 @@ function NewPlan({ me, places, presetPlaceId, reloadPlans }) {
                </div>`}
     </div>
 
-    <label class="label">${t('when')}
-      <input class="input" type="datetime-local" value=${when} min=${toLocalInput(new Date())}
-        onInput=${(e) => setWhen(e.target.value)} />
+    <div class="block">
+      <div class="label">${t('when')}</div>
+      <div class="chips">
+        ${quickTimes().map(([k, d]) => html`<button type="button" class=${'chip' + (when === toLocalInput(d) ? ' on' : '')}
+          onClick=${() => setWhen(toLocalInput(d))}>${t('qt.' + k)}</button>`)}
+      </div>
+      <label class="label" style="font-weight:500">${t('orPick')}
+        <input class="input" type="datetime-local" value=${when} min=${toLocalInput(new Date())}
+          onInput=${(e) => setWhen(e.target.value)} />
+      </label>
+    </div>
+
+    <label class="label">${t('notes')}
+      <textarea class="input textarea" rows="3" maxlength="300" placeholder=${t('notesHint')}
+        value=${desc} onInput=${(e) => setDesc(e.target.value)}></textarea>
     </label>
 
     <div class="block">
@@ -1155,6 +1238,7 @@ function Shell({ me, route }) {
   const [plans, setPlans] = useState([]);
   const [plansErr, setPlansErr] = useState(false);
   const [rels, setRels] = useState([]);
+  const [invitedIds, setInvitedIds] = useState([]);
   const [tab, id] = route.split('/');
 
   useEffect(() => {
@@ -1175,6 +1259,8 @@ function Shell({ me, route }) {
     if (error) { setPlansErr(true); return; }
     setPlansErr(false);
     setPlans(data || []);
+    const inv = await sb.from('plan_invites').select('plan_id').eq('user_id', me.id);
+    if (inv.data) setInvitedIds(inv.data.map((x) => x.plan_id));
   }
   useEffect(() => {
     loadPlans();
@@ -1197,8 +1283,8 @@ function Shell({ me, route }) {
   let navTab = tab;
   let showNav = true;
   if (tab === 'explore') body = html`<${Explore} me=${me} places=${places} plans=${plans} initialId=${id || null} loadError=${loadError} />`;
-  else if (tab === 'plans') body = html`<${PlansTab} me=${me} plans=${plans} err=${plansErr} />`;
-  else if (tab === 'plan' && id) { body = html`<${PlanPage} me=${me} id=${id} reloadPlans=${loadPlans} />`; navTab = 'plans'; }
+  else if (tab === 'plans') body = html`<${PlansTab} me=${me} plans=${plans} err=${plansErr} invitedIds=${invitedIds} />`;
+  else if (tab === 'plan' && id) { body = html`<${PlanPage} me=${me} id=${id} rels=${rels} reloadPlans=${loadPlans} />`; navTab = 'plans'; }
   else if (tab === 'new') { body = html`<${NewPlan} me=${me} places=${places} presetPlaceId=${id || null} reloadPlans=${loadPlans} />`; navTab = 'plans'; showNav = false; }
   else if (tab === 'chat' && id) { body = html`<${ChatPage} me=${me} id=${id} />`; navTab = 'plans'; showNav = false; }
   else if (tab === 'friends') body = html`<${FriendsTab} me=${me} rels=${rels} reloadRels=${loadRels} />`;
