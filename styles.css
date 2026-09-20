@@ -109,7 +109,7 @@ h1, h2, h3, p { margin: 0; }
 
 /* ---- explore + map ---- */
 .explore { position: absolute; inset: 0 0 var(--nav-h) 0; background: var(--blush); }
-.map { position: absolute; inset: 0; }
+.explore .map { position: absolute; inset: 0; width: 100%; height: 100%; }
 .list { position: absolute; inset: 0; overflow-y: auto; padding: 132px 20px 24px; display: flex; flex-direction: column; gap: 10px; }
 .topbar { position: absolute; top: 16px; left: 16px; right: 16px; z-index: 3; display: flex; flex-direction: column; gap: 10px; }
 .searchrow { display: flex; gap: 10px; }
